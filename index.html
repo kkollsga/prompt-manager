@@ -1,0 +1,4715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompt Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    <script>
+        // Theme Colors
+        const COLORS = {
+            primary: '#0072CE',
+            sidebarBg: '#B7D7F1',
+            error: '#F93822',
+            success: '#78BE20',
+            textDark: '#332C2A',
+            textLight: '#E5E3E2',
+            favoriteGlow: '#FFD700',
+            warning: '#F2A900',
+        };
+
+        // Tailwind Configuration
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: COLORS
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-white dark:bg-gray-900 text-textDark dark:text-textLight">
+    <!-- Core Application Structure -->
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <div id="sidebar" class="w-64 flex-shrink-0 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col h-full">
+            <!-- Will be populated by SidebarComponent -->
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-grow flex justify-center overflow-y-auto bg-gray-50 dark:bg-gray-900">
+            <div id="main-content" class="max-w-6xl w-full p-4">
+                <!-- Welcome View -->
+                <div id="welcome-view" class="space-y-6">
+                    <!-- Will be populated by WelcomeComponent -->
+                </div>
+        
+                <!-- Prompt Container -->
+                <div id="prompt-container" class="hidden">
+                    <!-- Will be populated by PromptViewManager -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Container -->
+    <div id="notification-container" class="fixed top-4 right-4 z-50"></div>
+
+<script>
+/*
+====================================
+    Base Component Class
+====================================
+*/
+class BaseComponent {
+    constructor() {
+        this.eventHandler = new EventController();
+    }
+
+    initialize() {
+        this.setupEventListeners();
+        this.render();
+    }
+
+    setupEventListeners() {
+        // To be implemented by child classes
+    }
+
+    render() {
+        // To be implemented by child classes
+    }
+
+    cleanup() {
+        this.eventHandler.unbindAll();
+    }
+}
+
+/*
+====================================
+    Event System
+====================================
+*/
+class EventController {
+    constructor() {
+        this.bindings = new Map();
+        this.contexts = new Map();
+    }
+
+    bind(element, event, handler, context = 'default') {
+        if (!element || !event || !handler) {
+            console.warn('Invalid bind parameters:', { element, event, handler });
+            return;
+        }
+
+        const wrappedHandler = (e) => {
+            try {
+                handler(e);
+            } catch (error) {
+                console.error('Event handler error:', error);
+                NotificationSystem.show('An error occurred', 'error');
+            }
+        };
+
+        const key = this.#getBindingKey(element, event, handler);
+        this.bindings.set(key, { element, event, wrappedHandler });
+        this.contexts.set(key, context);
+        element.addEventListener(event, wrappedHandler);
+    }
+
+    bindAll(bindings) {
+        if (!Array.isArray(bindings)) {
+            console.warn('bindAll requires an array of binding configurations');
+            return;
+        }
+
+        bindings.forEach(([element, event, handler]) => {
+            if (!element || !event || !handler) {
+                console.warn('Invalid binding configuration:', { element, event, handler });
+                return;
+            }
+            this.bind(element, event, handler);
+        });
+    }
+
+    unbind(element, event, handler) {
+        const key = this.#getBindingKey(element, event, handler);
+        const binding = this.bindings.get(key);
+        
+        if (binding) {
+            binding.element.removeEventListener(binding.event, binding.wrappedHandler);
+            this.bindings.delete(key);
+        }
+    }
+
+    unbindContext(context) {
+        const keysToRemove = [];
+        for (const [key, binding] of this.bindings.entries()) {
+            if (this.contexts.get(key) === context) {
+                binding.element.removeEventListener(binding.event, binding.wrappedHandler);
+                keysToRemove.push(key);
+            }
+        }
+        keysToRemove.forEach(key => {
+            this.bindings.delete(key);
+            this.contexts.delete(key);
+        });
+    }
+
+    unbindAll() {
+        this.bindings.forEach(binding => {
+            binding.element.removeEventListener(binding.event, binding.wrappedHandler);
+        });
+        this.bindings.clear();
+        this.contexts.clear();
+    }
+
+    #getBindingKey(element, event, handler) {
+        return `${element.id || element.tagName}_${event}_${handler.name || 'anonymous'}`;
+    }
+}
+
+/*
+====================================
+    Notification System
+====================================
+*/
+class NotificationSystem {
+    static #container = null;
+    static #queue = [];
+    static #isProcessing = false;
+
+    static initialize() {
+        if (!this.#container) {
+            this.#container = document.getElementById('notification-container');
+            if (!this.#container) {
+                this.#container = document.createElement('div');
+                this.#container.id = 'notification-container';
+                this.#container.className = 'fixed top-4 right-4 z-50 space-y-2';
+                document.body.appendChild(this.#container);
+            }
+        }
+    }
+
+    static show(message, type = 'info', duration = 3000) {
+        this.#queue.push({ message, type, duration });
+        if (!this.#isProcessing) {
+            this.#processQueue();
+        }
+    }
+
+    static async #processQueue() {
+        if (this.#queue.length === 0) {
+            this.#isProcessing = false;
+            return;
+        }
+
+        this.#isProcessing = true;
+        const { message, type, duration } = this.#queue.shift();
+
+        const notification = document.createElement('div');
+        notification.className = `
+            max-w-sm w-full bg-white shadow-lg rounded-lg pointer-events-auto
+            transform transition-all duration-300 ease-in-out
+            translate-x-full opacity-0
+            ${this.#getTypeStyles(type)}
+        `;
+
+        notification.textContent = message;
+        this.#container.appendChild(notification);
+
+        requestAnimationFrame(() => {
+            notification.classList.remove('translate-x-full', 'opacity-0');
+        });
+
+        setTimeout(() => {
+            notification.classList.add('translate-x-full', 'opacity-0');
+            setTimeout(() => {
+                notification.remove();
+                this.#processQueue();
+            }, 300);
+        }, duration);
+    }
+
+    static #getTypeStyles(type) {
+        switch(type) {
+            case 'error':
+                return 'bg-red-100 border-l-4 border-red-500 text-red-700 p-4';
+            case 'success':
+                return 'bg-green-100 border-l-4 border-green-500 text-green-700 p-4';
+            default:
+                return 'bg-blue-100 border-l-4 border-blue-500 text-blue-700 p-4';
+        }
+    }
+}
+
+/*
+====================================
+    Sidebar Section
+====================================
+*/
+class SidebarHTML {
+    static get structure() {
+        return `
+            <!-- Header Section -->
+            <div id="current-folder" class="p-4 border-b border-gray-200 dark:border-gray-700">
+                <div class="flex items-center space-x-3">
+                    <span id="back-arrow" 
+                          class="relative p-1.5 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 dark:hover:border-primary/30 transition-all cursor-pointer">
+                        <i class="fas fa-arrow-left text-gray-500 hover:text-primary transition-colors dark:text-gray-400 dark:hover:text-primary"></i>
+                        <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                    </span>
+                    <span id="folder-name" class="font-semibold text-gray-800 dark:text-gray-200 truncate">Root</span>
+                </div>
+            </div>
+        
+            <!-- Items List -->
+            <ul id="item-list" class="flex-1 overflow-y-auto p-3 space-y-1"></ul>
+        
+            <!-- Action Buttons Section -->
+            <div class="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 space-y-2">
+                <!-- Top Row - Import/Export or Selection Actions -->
+                <div class="flex items-center gap-2">
+                    <!-- Dark Mode Toggle (Always Visible) -->
+                    <button id="dark-mode-toggle" 
+                            class="relative py-2 px-4 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 transition-all dark:hover:border-yellow-400/30"
+                            title="Toggle Dark Mode">
+                        <i class="fas fa-moon text-primary/80 hover:text-primary transition-colors dark:hidden"></i>
+                        <i class="fas fa-sun hidden text-yellow-400/80 hover:text-yellow-400 transition-colors dark:block"></i>
+                        <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity dark:from-yellow-400/5 dark:to-orange-400/5"></span>
+                    </button>
+
+                    <!-- Import/Export Buttons (shown by default) -->
+                    <div id="default-actions" class="flex gap-2 flex-1">
+                        <button id="import-btn" 
+                                class="relative py-2 px-4 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 transition-all dark:hover:border-primary/30"
+                                title="Import">
+                            <i class="fas fa-file-import text-gray-600/80 hover:text-primary transition-colors dark:text-gray-300/80 dark:hover:text-primary"></i>
+                            <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                        </button>
+                        <button id="export-btn"
+                                class="relative py-2 px-4 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 transition-all dark:hover:border-primary/30"
+                                title="Export">
+                            <i class="fas fa-file-export text-gray-600/80 hover:text-primary transition-colors dark:text-gray-300/80 dark:hover:text-primary"></i>
+                            <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                        </button>
+                    </div>
+
+                    <!-- Selection Actions (hidden by default) -->
+                    <div id="selection-actions" class="hidden flex-1">
+                        <div class="flex items-center gap-2">
+                            <button id="move-selected-btn"
+                                    class="relative py-2 px-4 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 transition-all dark:hover:border-primary/30"
+                                    title="Move Selected">
+                                <i class="fas fa-arrow-right text-gray-600/80 hover:text-primary transition-colors dark:text-gray-300/80 dark:hover:text-primary"></i>
+                                <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                            </button>
+                            <button id="delete-selected-btn"
+                                    class="relative py-2 px-4 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-error/30 transition-all dark:hover:border-error/30"
+                                    title="Delete Selected">
+                                <i class="fas fa-trash text-gray-600/80 hover:text-error dark:text-gray-300/80 "></i>
+                                <span class="absolute inset-0 rounded-full bg-gradient-to-r from-red-500/5 to-pink-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                            </button>
+                            
+                            <!-- Folder Selection Dropdown -->
+                            <select id="move-folder-select" 
+                                class="hidden flex-1 px-3 py-2 rounded-full backdrop-blur-sm border border-white dark:border-gray-800
+                                       text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-700 
+                                       hover:border-primary dark:hover:border-primary focus:border-primary dark:focus:border-primary 
+                                       focus:ring-1 focus:ring-primary dark:focus:ring-primary transition-all">
+                                <option value="">Select destination...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Row - Always visible -->
+                <div class="flex items-center gap-2" id="bottom-actions">
+                    <button id="new-folder-btn" 
+                            class="relative py-2 px-4 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 transition-all dark:hover:border-primary/30"
+                            title="New Folder">
+                        <i class="fas fa-folder-plus text-gray-600/80 hover:text-primary transition-colors dark:text-gray-300/80 dark:hover:text-primary"></i>
+                        <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                    </button>
+                    <button id="new-prompt-btn" 
+                            class="relative flex-1 px-3 py-2 rounded-full backdrop-blur-sm border border-white dark:border-gray-800 hover:border-primary/30 transition-all dark:hover:border-primary/30
+                                   flex items-center justify-center">
+                        <div class="flex items-center">
+                            <i class="fas fa-file-alt text-gray-600/80 group-hover:text-primary transition-colors dark:text-gray-300/80 dark:hover:text-primary"></i>
+                            <span class="ml-2 text-gray-600/80 group-hover:text-primary transition-colors dark:text-gray-300/80 dark:hover:text-primary">New Prompt</span>
+                        </div>
+                        <span class="absolute inset-0 rounded-full bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 hover:opacity-100 transition-opacity"></span>
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    static renderFolderItem(id, folder, isSelected) {
+        return `
+            <li class="relative flex items-center p-2 rounded-lg cursor-pointer transition-all border border-white dark:border-gray-800 
+                       ${isSelected ? 'border-primary/30 dark:border-primary/30' : 'hover:border-primary/30 dark:hover:border-primary/30'}
+                       group"
+                data-id="${id}" 
+                data-type="folder">
+                <div class="flex items-center flex-1">
+                    <i class="fas fa-folder ${isSelected ? 'text-primary' : 'text-primary/80'} transition-colors w-5"></i>
+                    <span class="ml-2 text-gray-800 dark:text-gray-200 ${isSelected ? 'text-primary dark:text-primary' : ''} transition-colors">${folder.name}</span>
+                </div>
+                ${isSelected ? '<i class="fas fa-check text-primary ml-2"></i>' : ''}
+                <span class="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-500/5 to-purple-500/5 
+                            ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity"></span>
+            </li>
+        `;
+    }
+
+    static renderPromptItem(id, prompt, isSelected, isFavorite, isActive) {
+        return `
+            <li class="relative flex items-center p-2 rounded-lg cursor-pointer transition-all border
+                       ${isSelected || isActive ? 
+                           'border-primary/30 dark:border-primary/30' : 
+                           'border-white dark:border-gray-800 hover:border-primary/30 dark:hover:border-primary/30'
+                       }
+                       group"
+                data-id="${id}" 
+                data-type="prompt">
+                <div class="flex items-center flex-1">
+                    <i class="fas fa-file-alt w-5 transition-colors
+                            ${isActive ? 'text-primary' : 
+                              isSelected ? 'text-primary' :
+                              'text-gray-400/80 dark:text-gray-500/80'
+                            }"></i>
+                    <span class="ml-2 transition-colors
+                               ${isActive || isSelected ? 'text-primary dark:text-primary' :
+                                 'text-gray-800 dark:text-gray-200'
+                               }">${prompt.name}</span>
+                </div>
+                <div class="flex items-center space-x-2 relative z-10">
+                    ${isFavorite ? '<i class="fas fa-star text-yellow-400 drop-shadow-[0_2px_3px_rgba(250,204,21,0.4)] [text-shadow:_0_0_1px_#B45309]"></i>' : ''}
+                    ${isSelected ? '<i class="fas fa-check text-primary"></i>' : ''}
+                </div>
+                <span class="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-500/5 to-purple-500/5 
+                            ${isSelected || isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} 
+                            transition-opacity"></span>
+            </li>
+        `;
+    }
+}
+
+class SidebarComponent extends BaseComponent {
+    constructor() {
+        super();
+        this.currentFolderId = 'root';
+        this.selectedItems = new Set();
+        this.activePromptId = null;
+    }
+
+    setActivePrompt(promptId) {
+        this.activePromptId = promptId;
+        this.render();
+    }
+
+    setupEventListeners() {
+        this.ensureStructure();
+
+        // Action button listeners
+        const actionButtons = {
+            'back-arrow': () => this.handleNavigateUp(),
+            'new-folder-btn': () => this.handleNewFolder(),
+            'new-prompt-btn': () => this.handleNewPrompt(),
+            'import-btn': () => this.handleImport(),
+            'export-btn': () => this.handleExport(),
+            'delete-selected-btn': () => this.handleDeleteSelected(),
+            'move-selected-btn': () => this.handleMoveSelected()
+        };
+
+        Object.entries(actionButtons).forEach(([id, handler]) => {
+            const button = document.getElementById(id);
+            if (button) {
+                this.eventHandler.bind(button, 'click', handler.bind(this));
+            }
+        });
+
+        // Item list click handlers
+        const itemList = document.getElementById('item-list');
+        this.eventHandler.bind(itemList, 'click', (e) => this.handleItemClick(e));
+
+        // Keyboard shortcuts
+        this.eventHandler.bind(document, 'keydown', (e) => this.handleKeyboardShortcuts(e));
+
+        // Add dark mode toggle handler
+        const darkModeToggle = document.getElementById('dark-mode-toggle');
+        if (darkModeToggle) {
+            // Initialize dark mode based on storage or system preference
+            const initializeDarkMode = () => {
+                const storedDarkMode = localStorage.getItem('darkMode');
+                if (storedDarkMode === null) {
+                    // No stored preference, check system preference
+                    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    localStorage.setItem('darkMode', systemPrefersDark);
+                    if (systemPrefersDark) {
+                        document.documentElement.classList.add('dark');
+                    }
+                } else {
+                    // Use stored preference
+                    if (storedDarkMode === 'true') {
+                        document.documentElement.classList.add('dark');
+                    }
+                }
+            };
+
+            // Call initialization
+            initializeDarkMode();
+
+            // Handle toggle clicks
+            this.eventHandler.bind(darkModeToggle, 'click', () => {
+                document.documentElement.classList.add('transition-all', 'duration-200');
+                requestAnimationFrame(() => {
+                    document.documentElement.classList.toggle('dark');
+                    localStorage.setItem('darkMode', 
+                        document.documentElement.classList.contains('dark'));
+                    
+                    setTimeout(() => {
+                        document.documentElement.classList.remove('transition-all', 'duration-200');
+                    }, 300);
+                });
+            });
+
+            // Listen for system preference changes
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+                // Only update if user hasn't set a preference
+                if (localStorage.getItem('darkMode') === null) {
+                    if (e.matches) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
+                    localStorage.setItem('darkMode', e.matches);
+                }
+            });
+        }
+    }
+
+    handleItemClick(e) {
+        const item = e.target.closest('li[data-id]');
+        if (!item) return;
+
+        const id = item.dataset.id;
+        const type = item.dataset.type;
+
+        if (e.ctrlKey || e.metaKey) {
+            this.handleSelection(id, type);
+        } else {
+            // Clear selection
+            this.selectedItems.clear();
+            
+            // Navigate or open prompt
+            if (type === 'folder') {
+                this.navigateToFolder(id);
+            } else {
+                this.handlePromptClick(id);
+            }
+        }
+
+        this.render();
+        this.updateActionButtons();
+    }
+
+    handleSelection(id, type) {
+        // Find existing item in set that matches id and type
+        const existingItem = Array.from(this.selectedItems)
+            .find(item => item.id === id && item.type === type);
+        
+        if (existingItem) {
+            this.selectedItems.delete(existingItem);
+        } else {
+            this.selectedItems.add({id, type}); 
+        }
+    }
+
+    isSelected(id) {
+        return Array.from(this.selectedItems)
+            .some(item => item.id === id);
+    }
+    
+    handleKeyboardShortcuts(e) {
+        // Delete selected items
+        if (e.key === 'Delete' && this.selectedItems.size > 0) {
+            e.preventDefault();
+            this.handleDeleteSelected();
+        }
+    }
+
+    handleNavigateUp() {
+        try {
+            if (this.currentFolderId !== 'root') {
+                const parentId = window.promptApp.data.folders[this.currentFolderId].parentId || 'root';
+                this.navigateToFolder(parentId);
+            }
+        } catch (error) {
+            console.error('Navigation error:', error);
+            NotificationSystem.show('Error navigating to parent folder', 'error');
+        }
+    }
+
+    handleNewFolder() {
+        try {
+            const name = prompt('Enter folder name:');
+            if (!name) return;
+
+            const name_trimmed = name.trim();
+            if (name_trimmed.length === 0) {
+                NotificationSystem.show('Folder name cannot be empty', 'error');
+                return;
+            }
+
+            // Check for existing folder with same name
+            const folderExists = Object.values(window.promptApp.data.folders).some(
+                folder => folder.parentId === this.currentFolderId && 
+                         folder.name.toLowerCase() === name_trimmed.toLowerCase()
+            );
+
+            if (folderExists) {
+                NotificationSystem.show('A folder with this name already exists', 'error');
+                return;
+            }
+
+            const newFolder = {
+                name: name_trimmed,
+                parentId: this.currentFolderId
+            };
+
+            window.promptApp.addFolder(newFolder);
+            this.render();
+            
+        } catch (error) {
+            console.error('New folder error:', error);
+            NotificationSystem.show('Error creating new folder', 'error');
+        }
+    }
+
+    handleNewPrompt() {
+        try {
+            window.promptApp.createNewPrompt(this.currentFolderId);
+        } catch (error) {
+            console.error('New prompt error:', error);
+            NotificationSystem.show('Error creating new prompt', 'error');
+        }
+    }
+
+    handlePromptClick(id) {
+        try {
+            window.promptApp.loadPrompt(id);
+            this.setActivePrompt(id);
+        } catch (error) {
+            console.error('Error loading prompt:', error);
+            NotificationSystem.show('Error loading prompt', 'error');
+        }
+    }
+
+    handleImport() {
+        try {
+            window.promptApp.handleImport();
+        } catch (error) {
+            console.error('Import error:', error);
+            NotificationSystem.show('Error during import', 'error');
+        }
+    }
+
+    handleExport() {
+        try {
+            window.promptApp.handleExport();
+        } catch (error) {
+            console.error('Export error:', error);
+            NotificationSystem.show('Error during export', 'error');
+        }
+    }
+
+    handleMoveSelected() {
+        const moveSelect = document.getElementById('move-folder-select');
+        const newFolderBtn = document.getElementById('new-folder-btn');
+        const newPromptBtn = document.getElementById('new-prompt-btn');
+        const bottomActions = document.getElementById('bottom-actions');
+        
+        if (!moveSelect || !bottomActions || !newFolderBtn || !newPromptBtn) {
+            console.error("Required elements not found");
+            return;
+        }
+
+        // Hide new folder/prompt buttons
+        newFolderBtn.classList.add('hidden');
+        newPromptBtn.classList.add('hidden');
+        
+        // Show the select dropdown
+        moveSelect.classList.remove('hidden');
+        
+        // Move the dropdown to bottom row
+        bottomActions.appendChild(moveSelect);
+        
+        // Get available folders, excluding selected ones
+        const selectedIds = new Set(Array.from(this.selectedItems).map(item => item.id));
+        const folders = window.promptApp.getFolderList()
+            .filter(folder => !selectedIds.has(folder.id));
+
+        // Populate dropdown
+        moveSelect.innerHTML = `
+            <option value="">Select destination...</option>
+            ${folders.map(folder => `
+                <option value="${folder.id}">${folder.name}</option>
+            `).join('')}
+        `;
+
+        const restoreButtons = () => {
+            newFolderBtn.classList.remove('hidden');
+            newPromptBtn.classList.remove('hidden');
+            moveSelect.classList.add('hidden');
+            moveSelect.value = '';
+            document.removeEventListener('click', handleOutsideClick);
+        };
+
+        // Handle selection
+        const handleChange = (e) => {
+            const targetFolderId = e.target.value;
+            if (!targetFolderId) return;
+
+            if (window.promptApp.moveItemsToFolder(
+                Array.from(this.selectedItems), 
+                targetFolderId
+            )) {
+                this.clearSelection();
+            }
+            restoreButtons();
+            moveSelect.removeEventListener('change', handleChange);
+        };
+
+        // Handle clicking outside
+        const handleOutsideClick = (e) => {
+            if (!moveSelect.contains(e.target) && !e.target.closest('#move-selected-btn')) {
+                restoreButtons();
+            }
+        };
+
+        moveSelect.addEventListener('change', handleChange);
+        document.addEventListener('click', handleOutsideClick);
+    }
+
+    handleDeleteSelected() {
+        if (this.selectedItems.size === 0) return;
+
+        const itemCount = this.selectedItems.size;
+        const itemType = Array.from(this.selectedItems)[0].type;
+        const isMultipleTypes = Array.from(this.selectedItems).some(item => item.type !== itemType);
+
+        let message = `Are you sure you want to delete ${itemCount} `;
+        if (isMultipleTypes) {
+            message += 'items';
+        } else {
+            message += itemCount === 1 ? itemType : `${itemType}s`;
+        }
+        message += '?';
+
+        // Add warning for folder deletion
+        const hasFolders = Array.from(this.selectedItems).some(item => item.type === 'folder');
+        if (hasFolders) {
+            message += '\n\nWarning: Deleting folders will also delete all contents inside them.';
+        }
+
+        if (confirm(message)) {
+            if (window.promptApp.deleteItems(Array.from(this.selectedItems))) {
+                this.clearSelection();
+            }
+        }
+    }
+
+    clearSelection() {
+        this.selectedItems.clear();
+        this.updateActionButtons();
+        this.render();
+    }
+
+    isSelected(id) {
+        return Array.from(this.selectedItems).some(item => item.id === id);
+    }
+
+    navigateToFolder(folderId) {
+        if (!window.promptApp.data.folders[folderId]) {
+            throw new Error('Invalid folder ID');
+        }
+        this.currentFolderId = folderId;
+        this.clearSelection();
+        this.render();
+    }
+
+    updateActionButtons() {
+        const hasSelection = this.selectedItems.size > 0;
+        
+        // Toggle visibility of action groups
+        const defaultActions = document.getElementById('default-actions');
+        const selectionActions = document.getElementById('selection-actions');
+        const moveSelect = document.getElementById('move-folder-select');
+        
+        if (defaultActions && selectionActions) {
+            defaultActions.classList.toggle('hidden', hasSelection);
+            selectionActions.classList.toggle('hidden', !hasSelection);
+            
+            if (moveSelect) {
+                moveSelect.classList.add('hidden');
+                moveSelect.value = '';
+            }
+        }
+
+        // Update button titles if needed
+        if (hasSelection) {
+            const moveBtn = document.getElementById('move-selected-btn');
+            const deleteBtn = document.getElementById('delete-selected-btn');
+            
+            if (moveBtn && deleteBtn) {
+                const count = this.selectedItems.size;
+                moveBtn.title = `Move ${count} item(s)`;
+                deleteBtn.title = `Delete ${count} item(s)`;
+            }
+        }
+    }
+
+    render() {
+        this.ensureStructure();
+        this.updateFolderName();
+        this.renderItems();
+    }
+
+    ensureStructure() {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && !sidebar.querySelector('#current-folder')) {
+            sidebar.innerHTML = SidebarHTML.structure;
+        }
+    }
+
+    updateFolderName() {
+        const folderName = document.getElementById('folder-name');
+        const currentFolder = window.promptApp.data.folders[this.currentFolderId];
+        if (folderName && currentFolder) {
+            folderName.textContent = currentFolder.name;
+        }
+    }
+
+    renderItems() {
+        const itemList = document.getElementById('item-list');
+        if (!itemList) return;
+
+        const folders = Object.entries(window.promptApp.data.folders)
+            .filter(([_, folder]) => folder.parentId === this.currentFolderId)
+            .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+        const prompts = Object.entries(window.promptApp.data.prompts)
+            .filter(([_, prompt]) => prompt.parentId === this.currentFolderId)
+            .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+        const html = [
+            ...folders.map(([id, folder]) => 
+                SidebarHTML.renderFolderItem(id, folder, this.isSelected(id))),
+            ...prompts.map(([id, prompt]) => 
+                SidebarHTML.renderPromptItem(
+                    id, 
+                    prompt, 
+                    this.isSelected(id),
+                    window.promptApp.isFavorite(id),
+                    id === this.activePromptId
+                ))
+        ].join('');
+
+        itemList.innerHTML = html || '<p class="text-gray-500 p-2">This folder is empty</p>';
+    }
+}
+
+/*
+====================================
+    WelcomeView Section
+====================================
+*/
+class WelcomeHTML {
+    static mainStructure() {
+        return `
+            <div class="space-y-6">
+                ${this.introductionSection()}
+                ${this.favoritesSection()}
+                ${this.recentsSection()}
+            </div>
+        `;
+    }
+
+    static introductionSection() {
+        return `
+            <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6 border border-gray-200 dark:border-gray-700">
+                <h1 class="text-3xl font-bold text-primary mb-6">Prompt Manager</h1>
+                <div class="prose prose-gray dark:prose-invert max-w-none">
+                    <p class="text-gray-600 dark:text-gray-300 mb-4">
+                        Prompt Manager is designed to help you create, organize, and optimize prompts for AI language models. 
+                        Well-crafted prompts can significantly improve AI responses by providing clear instructions and context.
+                    </p>
+                    <p class="text-gray-600 dark:text-gray-300 mb-4">
+                        Prompt engineering is the art and science of crafting effective prompts to get the best results 
+                        from AI language models. A well-designed prompt can significantly improve the quality, accuracy, 
+                        and relevance of AI responses. For an introduction check out 
+                        <a href="https://platform.openai.com/docs/guides/prompt-engineering" 
+                           target="_blank" 
+                           rel="noopener noreferrer"
+                           class="inline-flex items-center gap-2 text-primary hover:text-primary/80 font-medium">
+                            <span>OpenAI's Prompt Engineering Intro</span>
+                            <i class="fas fa-external-link-alt"></i>
+                        </a>.
+                    </p>
+                    <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 border border-gray-200 dark:border-gray-600">
+                        <p class="font-medium text-gray-700 dark:text-gray-200 mb-2">Need inspiration? Check out these excellent prompt libraries:</p>
+                        <div class="flex flex-wrap gap-4">
+                            <a href="https://docs.anthropic.com/en/prompt-library/library" 
+                               target="_blank" 
+                               rel="noopener noreferrer"
+                               class="inline-flex items-center gap-2 text-primary hover:text-primary/80 font-medium">
+                                <i class="fas fa-book"></i>
+                                <span>Anthropic's Prompt Library</span>
+                            </a>
+                            <a href="https://platform.openai.com/docs/examples" 
+                               target="_blank" 
+                               rel="noopener noreferrer"
+                               class="inline-flex items-center gap-2 text-primary hover:text-primary/80 font-medium">
+                                <i class="fas fa-external-link-alt"></i>
+                                <span>OpenAI's Example Library</span>
+                            </a>
+                        </div>
+                    </div>
+                    ${UsageGuideHTML.mainStructure()}
+                </div>
+            </div>
+        `;
+    }
+
+    static favoritesSection() {
+        return `
+            <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6 border border-gray-200 dark:border-gray-700">
+                <div class="flex items-center mb-4">
+                    <i class="fas fa-star text-yellow-400 drop-shadow-[0_2px_3px_rgba(250,204,21,0.4)] [text-shadow:_0_0_1px_#B45309] mr-2"></i>
+                    <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-200">Favorite Prompts</h2>
+                </div>
+                <div id="favorite-prompts" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Will be populated dynamically -->
+                </div>
+            </div>
+        `;
+    }
+
+    static recentsSection() {
+        return `
+            <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6 border border-gray-200 dark:border-gray-700">
+                <div class="flex items-center mb-4">
+                    <i class="fas fa-clock text-primary mr-2"></i>
+                    <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-200">Recently Edited Prompts</h2>
+                </div>
+                <div id="recent-prompts" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Will be populated dynamically -->
+                </div>
+            </div>
+        `;
+    }
+
+    static promptCard(prompt, isFavorite = false, previewText) {
+        return `
+            <div class="relative bg-white dark:bg-gray-800 shadow-md rounded-lg p-4 cursor-pointer 
+                border border-gray-200 dark:border-gray-700 
+                hover:shadow-lg hover:border-primary/20 dark:hover:border-primary/40 
+                transition-all duration-200"
+                data-prompt-id="${prompt.id}">
+                <div class="flex justify-between items-start mb-2">
+                    <h3 class="font-bold text-lg text-gray-800 dark:text-gray-200">${prompt.name}</h3>
+                    ${isFavorite ? `
+                        <i class="fas fa-star text-yellow-400 drop-shadow-[0_2px_3px_rgba(250,204,21,0.4)] [text-shadow:_0_0_1px_#B45309]"></i>
+                    ` : ''}
+                </div>
+                <p class="text-sm text-gray-600 dark:text-gray-300 leading-5 min-h-[2.5rem] max-h-[2.5rem] overflow-hidden">
+                    ${previewText}
+                </p>
+                <div class="absolute inset-0 bg-primary/5 dark:bg-primary/10 opacity-0 hover:opacity-100 transition-opacity duration-200 rounded-lg"></div>
+            </div>
+        `;
+    }
+
+    static emptyPromptList(message) {
+        return `<p class="col-span-full text-gray-500 dark:text-gray-400 text-center">${message}</p>`;
+    }
+}
+
+class UsageGuideHTML {
+    static mainStructure() {
+        return `
+            <div class="bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600 mt-4">
+                ${this.headerSection()}
+                ${this.contentSection()}
+            </div>
+        `;
+    }
+
+    static headerSection() {
+        return `
+            <button id="usage-guide-toggle" 
+                    class="w-full flex p-4 items-center justify-between text-left">
+                <p class="text-lg font-medium text-gray-700 dark:text-gray-200">
+                    <i class="fas fa-book-open text-primary mr-2"></i>
+                    Learn how to use Prompt Manager effectively:
+                </p>
+                <i class="fas fa-chevron-down text-gray-600 dark:text-gray-400"></i>
+            </button>
+        `;
+    }
+
+    static contentSection() {
+        return `
+            <div id="usage-guide-content" 
+                 class="overflow-hidden rounded-lg transition-all duration-300 ease-in-out transform"
+                 style="max-height: 0;">
+                ${this.tabButtons()}
+                ${this.tabContents()}
+            </div>
+        `;
+    }
+
+    static tabButtons() {
+        return `
+            <div class="flex space-x-4 border-b border-gray-200 dark:border-gray-600 px-4">
+                <button class="tab-button py-2 px-4 text-base font-medium text-primary hover:text-primary/80 border-b-2 border-transparent" 
+                        data-tab="usage">Usage Tips</button>
+                <button class="tab-button py-2 px-4 text-base font-medium text-primary hover:text-primary/80 border-b-2 border-transparent" 
+                        data-tab="markdown">Markdown</button>
+                <button class="tab-button py-2 px-4 text-base font-medium text-primary hover:text-primary/80 border-b-2 border-transparent" 
+                        data-tab="placeholders">Placeholders</button>
+                <button class="tab-button py-2 px-4 text-base font-medium text-primary hover:text-primary/80 border-b-2 border-transparent" 
+                        data-tab="if-statements">If-statements</button>
+            </div>
+        `;
+    }
+
+    static tabContents() {
+        return `
+            <div class="bg-white dark:bg-gray-800 p-6">
+                ${this.usageTipsTab()}
+                ${this.markdownTab()}
+                ${this.placeholdersTab()}
+                ${this.ifStatementsTab()}
+            </div>
+        `;
+    }
+
+    static usageTipsTab() {
+        return `
+            <div class="tab-content space-y-6" data-tab="usage">
+                <p class="text-base text-gray-700 dark:text-gray-300">
+                    Use Prompt Manager to organize, store and created optimized prompts for AI language models.
+                    Prompts can be stored and shared using the import and export button. To delete or move prompts and folders use <code>ctrl + select</code> in the sidebar.
+                </p>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Key Features</h4>
+                    <ul class="space-y-3 text-base text-gray-700 dark:text-gray-300">
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-folder-tree text-primary text-lg"></i>
+                            <span>Organize prompts in folders for better management</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-markdown text-primary text-lg"></i>
+                            <span>Native markdown support for rich text formatting</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-code text-primary text-lg"></i>
+                            <span>Dynamic placeholders for reusable prompts</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-code-branch text-primary text-lg"></i>
+                            <span>Conditional blocks for adaptive prompts</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Prompting Best Practices</h4>
+                    <div class="space-y-4 text-base text-gray-700 dark:text-gray-300">
+                        <p class="flex items-start gap-3">
+                            <i class="fas fa-lightbulb text-primary text-lg mt-1"></i>
+                            <span><strong>Be Specific:</strong> Clearly state what you want the AI to do. Use explicit instructions rather than relying on implications.</span>
+                        </p>
+                        <p class="flex items-start gap-3">
+                            <i class="fas fa-bullseye text-primary text-lg mt-1"></i>
+                            <span><strong>Context Matters:</strong> Provide relevant background information and specify the desired format or style of response.</span>
+                        </p>
+                        <p class="flex items-start gap-3">
+                            <i class="fas fa-layer-group text-primary text-lg mt-1"></i>
+                            <span><strong>Break It Down:</strong> For complex tasks, break them into smaller, clearer steps. Use numbered lists or bullet points.</span>
+                        </p>
+                        <p class="flex items-start gap-3">
+                            <i class="fas fa-eye text-primary text-lg mt-1"></i>
+                            <span><strong>Examples Help:</strong> When possible, include examples of the desired output format or style.</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    static markdownTab() {
+        return `
+            <div class="tab-content hidden space-y-6" data-tab="markdown">
+                <h3 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Markdown Guide</h3>
+                
+                <p class="text-base text-gray-700 dark:text-gray-300">
+                    Markdown is a lightweight markup language that allows you to format text using simple syntax.
+                    Here's how to use the most common formatting options:
+                </p>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Headers</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+# Header 1
+## Header 2
+### Header 3
+#### Header 4</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Text Formatting</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+**Bold text**
+*Italic text*
+~~Strikethrough~~
+> Blockquote</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Lists</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+- Unordered list item
+* Another unordered item
+1. Ordered list item
+2. Second ordered item</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Code</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+\`Inline code\`
+\`\`\`python
+# Code block
+print("Hello World")
+\`\`\`</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Tables</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+| Header 1 | Header 2 |
+|----------|----------|
+| Cell 1   | Cell 2   |
+| Cell 3   | Cell 4   |</pre>
+                </div>
+            </div>
+        `;
+    }
+
+    static placeholdersTab() {
+        return `
+            <div class="tab-content hidden space-y-6" data-tab="placeholders">
+                <h3 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Working with Placeholders</h3>
+                
+                <p class="text-base text-gray-700 dark:text-gray-300">
+                    Placeholders allow you to create dynamic prompts by defining variables that can be filled in later.
+                    This makes your prompts more flexible and reusable.
+                </p>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Basic Syntax</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+&lt;variable_name:type&gt; - Basic placeholder
+&lt;variable_name:type[option 1, option 2]&gt; - Placeholder with options specified.<br>Supported in bool, select and radio types.
+&lt;!variable_name:type&gt; - Hidden placeholder.<br>The value will not be shown in the prompt (Good for conditionals).</pre>
+&lt;variable_name:type=default&gt; - With default value
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Supported Types</h4>
+                    <ul class="space-y-2 text-base text-gray-700 dark:text-gray-300">
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">str</code>
+                            <span>- Short text input</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">text</code>
+                            <span>- Long text input</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">int</code>
+                            <span>- Integer numbers</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">float</code>
+                            <span>- Decimal numbers</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">bool</code>
+                            <span>- True/false values</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">select</code>
+                            <span>- Choose from predefined options</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">radio</code>
+                            <span>- Choose from radio selector</span>
+                        </li>
+                        <li class="flex items-center gap-2">
+                            <code class="bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded text-base">date</code>
+                            <span>- Show a date selector</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Examples</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+&lt;name:text&gt; - Basic text input
+&lt;age:int=25&gt; - Number with default
+&lt;options:select[yes,no,maybe]&gt; - Selection
+&lt;!hidden:text&gt; - Hidden in output</pre>
+                </div>
+            </div>
+        `;
+    }
+
+    static ifStatementsTab() {
+        return `
+            <div class="tab-content hidden space-y-6" data-tab="if-statements">
+                <h3 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Conditional Blocks</h3>
+                
+                <p class="text-base text-gray-700 dark:text-gray-300">
+                    Conditional blocks allow you to include or exclude parts of your prompt based on placeholder values.
+                    This creates dynamic, context-aware prompts that adapt to user input.
+                </p>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Basic If Statement</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+{if variable}content to include{/if}</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">If-Else Statement</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+{if variable}content if true{else}content if false{/if}</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Complex Example</h4>
+                    <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
+&lt;!expertise:radio[basic,intermediate,advanced]&gt;
+
+{if expertise=advanced}
+    Provide a detailed technical analysis...
+{else if expertise=intermediate}
+    Explain with moderate technical detail...
+{else}
+    Explain in simple terms...
+{/if}</pre>
+                </div>
+
+                <div class="space-y-4">
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Tips</h4>
+                    <ul class="space-y-3 text-base text-gray-700 dark:text-gray-300">
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-check text-primary"></i>
+                            <span>Conditions support equality checks (variable=value)</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-check text-primary"></i>
+                            <span>Nested conditions are supported</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-check text-primary"></i>
+                            <span>Use with boolean placeholders for simple toggles</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-check text-primary"></i>
+                            <span>Multiple else-if statements are supported</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        `;
+    }
+}
+
+class WelcomeComponent extends BaseComponent {
+    constructor() {
+        super();
+        this.textProcessor = new TextProcessor();
+        this.isGuideExpanded = false;
+    }
+
+    initialize() {
+        this.setupEventListeners();
+        this.render();
+    }
+
+    formatPreviewText(content, maxLength) {
+        const LINE_1_MAX = maxLength;  // e.g., 150
+        const LINE_2_MAX = Math.floor(maxLength * 0.7);  // e.g., 105 chars
+        
+        // Normalize line breaks: collapse multiple into single, trim spaces around breaks
+        content = content
+            .replace(/\r\n/g, '\n')
+            .replace(/[\r\v\f\u2028\u2029]/g, '\n')
+            .replace(/\n\s+/g, '\n')
+            .replace(/\s+\n/g, '\n')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+
+        // Split into lines
+        let lines = content.split('\n');
+        
+        // Handle first line
+        if (lines[0].length > LINE_1_MAX) {
+            const breakPoint = lines[0].lastIndexOf(' ', LINE_1_MAX);
+            lines[0] = lines[0].slice(0, breakPoint > 0 ? breakPoint : LINE_1_MAX);
+            return lines[0] + '...';
+        }
+        
+        // If we have more lines
+        if (lines.length > 1) {
+            // Take only second line for processing
+            let secondLine = lines[1];
+            
+            // If second line is too long, truncate it
+            if (secondLine.length > LINE_2_MAX) {
+                const breakPoint = secondLine.lastIndexOf(' ', LINE_2_MAX);
+                secondLine = secondLine.slice(0, breakPoint > 0 ? breakPoint : LINE_2_MAX) + '...';
+            }
+            
+            return `${lines[0]}<br>${secondLine}${lines.length > 2 ? '...' : ''}`;
+        }
+        
+        return lines[0];
+    }
+
+    render() {
+        const welcomeView = document.getElementById('welcome-view');
+        if (!welcomeView) return;
+
+        // Set main structure
+        welcomeView.innerHTML = WelcomeHTML.mainStructure();
+
+        // Bind events for usage guide
+        this.bindUsageGuideEvents();
+
+        // Get favorite and recent prompts
+        const favorites = window.promptApp.getFavorites();
+        const recents = window.promptApp.getRecentlyEdited().slice(0, 3);
+
+        // Render favorite prompts
+        const favoritePromptsContainer = document.getElementById('favorite-prompts');
+        if (favoritePromptsContainer) {
+            if (favorites.length > 0) {
+                favoritePromptsContainer.innerHTML = favorites
+                    .map(prompt => {
+                        const rawContent = this.textProcessor.processText(prompt.content, new Map(), true, false);
+                        const previewText = this.formatPreviewText(rawContent, 150);
+                        return WelcomeHTML.promptCard(prompt, true, previewText);
+                    })
+                    .join('');
+            } else {
+                favoritePromptsContainer.innerHTML = WelcomeHTML.emptyPromptList('No favorite prompts yet');
+            }
+        }
+
+        // Render recent prompts
+        const recentPromptsContainer = document.getElementById('recent-prompts');
+        if (recentPromptsContainer) {
+            if (recents.length > 0) {
+                recentPromptsContainer.innerHTML = recents
+                    .map(prompt => {
+                        const rawContent = this.textProcessor.processText(prompt.content, new Map(), true, false);
+                        const previewText = this.formatPreviewText(rawContent, 150);
+                        return WelcomeHTML.promptCard(prompt, window.promptApp.isFavorite(prompt.id), previewText);
+                    })
+                    .join('');
+            } else {
+                recentPromptsContainer.innerHTML = WelcomeHTML.emptyPromptList('No recent prompts');
+            }
+        }
+    }
+
+    setupEventListeners() {
+        const welcomeView = document.getElementById('welcome-view');
+        if (!welcomeView) return;
+
+        this.eventHandler.bind(welcomeView, 'click', (e) => {
+            const promptCard = e.target.closest('[data-prompt-id]');
+            if (promptCard) {
+                const promptId = promptCard.dataset.promptId;
+                window.promptApp.loadPrompt(promptId);
+            }
+        });
+    }
+
+    setupUsageGuide() {
+        // Initialize any necessary state
+        this.isGuideExpanded = false;
+    }
+
+    bindUsageGuideEvents() {
+        const toggleButton = document.getElementById('usage-guide-toggle');
+        const tabButtons = document.querySelectorAll('.tab-button');
+
+        if (toggleButton) {
+            this.eventHandler.bind(
+                toggleButton,
+                'click',
+                this.handleGuideToggle.bind(this),
+                'usageGuide'
+            );
+        }
+
+        tabButtons.forEach(button => {
+            this.eventHandler.bind(
+                button,
+                'click',
+                this.handleTabChange.bind(this),
+                'usageGuide'
+            );
+        });
+    }
+
+    handleGuideToggle(e) {
+        const content = document.getElementById('usage-guide-content');
+        const chevron = e.currentTarget.querySelector('.fa-chevron-down');
+        
+        this.isGuideExpanded = !this.isGuideExpanded;
+        
+        if (this.isGuideExpanded) {
+            content.style.maxHeight = `${content.scrollHeight}px`;
+            content.classList.remove('opacity-0');
+            content.classList.add('opacity-100');
+            chevron.style.transform = 'rotate(180deg)';
+        } else {
+            content.classList.remove('opacity-100');
+            content.classList.add('opacity-0');
+            setTimeout(() => {
+                content.style.maxHeight = '0';
+            }, 200);
+            chevron.style.transform = 'rotate(0)';
+        }
+    }
+
+    handleTabChange(e) {
+        const targetTab = e.currentTarget.dataset.tab;
+        const content = document.getElementById('usage-guide-content');
+        
+        // Update button states
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            if (btn.dataset.tab === targetTab) {
+                btn.classList.add('text-primary', 'border-primary');
+                btn.classList.remove('text-primary/80', 'border-transparent');
+            } else {
+                btn.classList.remove('text-primary', 'border-primary');
+                btn.classList.add('text-primary/80', 'border-transparent');
+            }
+        });
+
+        // Directly switch tab content
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.toggle('hidden', content.dataset.tab !== targetTab);
+        });
+
+        // Update container height
+        if (this.isGuideExpanded) {
+            content.style.maxHeight = `${content.scrollHeight}px`;
+        }
+    }
+
+    destroy() {
+        this.eventHandler.unbindContext('usageGuide');
+        super.destroy();
+    }
+}
+
+/*
+====================================
+    PromptView Section
+====================================
+*/
+
+/*
+====================================
+    PromptView HTML Templates
+====================================
+*/
+class PromptViewHTML {
+   static get structure() {
+       return `
+           <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6">
+               <!-- Header -->
+               <div class="flex justify-between items-center mb-4">
+                   <div class="flex items-center">
+                       <button id="edit-prompt-btn" 
+                           class="text-primary hover:text-primary/80 mr-2" 
+                           title="Edit Prompt">
+                           <i class="fas fa-edit"></i>
+                       </button>
+                       <div id="prompt-title-container" class="relative">
+                           <h2 id="prompt-title" 
+                               class="text-2xl font-bold text-gray-800 dark:text-gray-200 min-w-[200px] min-h-[36px] px-2 py-1 rounded
+                                      empty:before:content-[attr(data-placeholder)] empty:before:text-gray-400 dark:empty:before:text-gray-500
+                                      focus:outline-none focus:ring-2 focus:ring-primary/20 dark:focus:ring-primary/40"
+                               contenteditable="false"
+                               data-placeholder="Enter prompt title...">
+                           </h2>
+                       </div>
+                   </div>
+                   <div class="flex items-center space-x-3">
+                       <button id="favorite-prompt-btn" 
+                           class="text-gray-300 dark:text-gray-600 hover:text-yellow-400 mr-2" 
+                           title="Favorite">
+                           <i class="fas fa-star"></i>
+                       </button>
+                       <button id="close-prompt-btn" 
+                           class="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" 
+                           title="Close">
+                           <i class="fas fa-times"></i>
+                       </button>
+                   </div>
+               </div>
+
+               <!-- Editor Section -->
+               <div id="prompt-editor" class="hidden">
+                   <textarea id="prompt-content" 
+                       class="w-full p-4 border border-gray-200 dark:border-gray-600 rounded-lg resize-none min-h-[200px]
+                              bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100
+                              placeholder-gray-400 dark:placeholder-gray-500
+                              focus:border-primary dark:focus:border-primary 
+                              focus:ring-1 focus:ring-primary dark:focus:ring-primary"
+                       placeholder="Enter your prompt content here..."></textarea>
+                   <div class="flex justify-end space-x-2 mt-2">
+                       <button id="save-prompt-btn"
+                           class="px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 
+                                  transition-colors">
+                           Save Changes
+                       </button>
+                       <button id="cancel-edit-btn"
+                           class="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 
+                                  rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600
+                                  transition-colors">
+                           Cancel
+                       </button>
+                   </div>
+               </div>
+
+               <!-- Placeholder Inputs -->
+               <div id="placeholder-inputs" class="space-y-4 mb-4"></div>
+
+               <!-- Display Section -->
+               <div id="prompt-display" class="prose prose-gray dark:prose-invert mt-4">
+                   <div class="markdown-content"></div>
+                   <button id="copy-prompt-btn"
+                       class="absolute bottom-2 right-2 bg-primary text-white p-2 rounded-full 
+                              shadow-lg hover:bg-primary/80 transition-colors">
+                       <i class="fas fa-copy"></i>
+                   </button>
+               </div>
+           </div>
+       `;
+   }
+}
+
+/*
+====================================
+    Main Prompt View Manager
+====================================
+*/
+class PromptViewManager extends BaseComponent {
+    constructor() {
+        super();
+        this._ = {
+            currentPromptId: null,
+            currentPrompt: null,
+            isEditing: false,
+            pendingChanges: null,
+            content: '',
+            placeholderValues: new Map()  // Always initialize empty Map
+        };
+
+        this.editor = null;
+        this.placeholderManager = null;
+        this.display = null;
+        this.container = null;
+        this.isInitializing = false;
+    }
+
+    setEditMode(isEditing) {
+        this.prop('isEditing', isEditing);
+        
+        if (isEditing) {
+            const existingChanges = this.prop('pendingChanges') || {};
+            this.prop('pendingChanges', {
+                ...existingChanges,  // Preserve existing properties like isNew
+                title: this.prop('currentPrompt')?.name || existingChanges.title || '',
+                content: this.prop('content') || existingChanges.content || ''
+            });
+        } else {
+            this.prop('pendingChanges', null);
+        }
+        
+        // Sync all components that need to know about edit state
+        if (this.editor) {
+            this.editor.syncEditState(isEditing);
+        }
+        if (this.placeholderManager) {
+            this.placeholderManager.handleEditModeChange(isEditing);
+        }
+        if (this.display) {
+            this.display.handleEditModeChange(isEditing);
+        }
+        
+        this.render();
+    }
+
+    prop(name, value) {
+        // If value is undefined, act as a getter
+        if (value === undefined) {
+            return this._[name];
+        }
+
+        // Set the value
+        this._[name] = value;
+    }
+
+    async initialize() {
+        this.container = document.getElementById('prompt-container');
+        if (!this.container) {
+            console.error('Prompt container not found');
+            return false;
+        }
+
+        // Initialize base structure
+        this.container.innerHTML = PromptViewHTML.structure;
+        
+        // Setup base event listeners
+        this.setupEventListeners();
+        
+        return true;
+    }
+
+    async initializeComponents() {
+        this.isInitializing = true;
+        try {
+            // Create components
+            this.editor = new PromptEditor(this);
+            this.placeholderManager = new PlaceholderManager(this);
+            this.display = new PromptDisplay(this);
+
+            // Sequential initialization
+            await this.editor.initialize();
+            await this.editor.render();
+            
+            await this.placeholderManager.initialize();
+            await this.placeholderManager.render();
+            
+            await this.display.initialize();
+            await this.display.render();
+
+            this.isInitializing = false;
+            return true;
+        } catch (error) {
+            console.error('❌ Error initializing components:', error);
+            this.isInitializing = false;
+            this.destroyComponents();
+            return false;
+        }
+    }
+
+    destroyComponents() {        
+        if (this.editor) {
+            this.editor.destroy();
+            this.editor = null;
+        }
+        if (this.placeholderManager) {
+            this.placeholderManager.destroy();
+            this.placeholderManager = null;
+        }
+        if (this.display) {
+            this.display.destroy();
+            this.display = null;
+        }
+    }
+
+    setupEventListeners() {
+        // Clear existing listeners first
+        this.eventHandler.unbindAll();
+        
+        const closeBtn = document.getElementById('close-prompt-btn');
+        const favoriteBtn = document.getElementById('favorite-prompt-btn');
+
+        if (closeBtn) {
+            this.eventHandler.bind(closeBtn, 'click', () => this.closePrompt());
+        }
+        if (favoriteBtn) {
+            this.eventHandler.bind(favoriteBtn, 'click', () => this.toggleFavorite());
+        }
+    }
+
+    handleEditModeChange(isEditing) {
+        this.prop('isEditing', isEditing);
+        
+        if (isEditing) {
+            this.prop('pendingChanges', {
+                title: this.prop('currentPrompt')?.name || '',
+                content: this.prop('content') || ''
+            });
+        } else {
+            this.prop('pendingChanges', null);
+        }
+        
+        // Notify child components
+        if (this.placeholderManager) this.placeholderManager.handleEditModeChange(isEditing);
+        if (this.display) this.display.handleEditModeChange(isEditing);
+    }
+
+    handleEditorContentChange(newContent) {
+        if (this.isInitializing || !this.prop('isEditing')) return;
+
+        this.prop('content', newContent);
+        
+        const pendingChanges = this.prop('pendingChanges');
+        if (pendingChanges) {
+            pendingChanges.content = newContent;
+            this.prop('pendingChanges', pendingChanges);
+        }
+
+        if (this.placeholderManager) {
+            this.placeholderManager.checkContent(newContent);
+        }
+        if (this.display) {
+            this.display.updateContent(newContent); // No need to pass values separately
+        }
+    }
+
+    handleTitleChange(newTitle) {
+        if (!this.prop('isEditing') || !this.prop('pendingChanges')) return;
+        
+        const pendingChanges = this.prop('pendingChanges');
+        pendingChanges.title = newTitle;
+        this.prop('pendingChanges', pendingChanges);
+    }
+
+    updatePlaceholderDefinition(name, details) {
+        const values = this.prop('placeholderValues');
+        
+        // Preserve any existing value
+        const existingValue = values.get(name)?.value;
+        if (existingValue !== null && existingValue !== undefined) {
+            details.value = existingValue;
+        }
+        
+        values.set(name, details);
+        this.prop('placeholderValues', values);
+
+        // Update display if needed
+        if (this.display && !this.isInitializing) {
+            this.display.updateContent(this.prop('content'));
+        }
+    }
+
+    handlePlaceholderValueChange(name, value) {
+        const values = this.prop('placeholderValues');
+        const placeholder = values.get(name);
+        if (placeholder) {
+            values.set(name, { 
+                ...placeholder, 
+                value: value === '' ? undefined : value  // Convert empty to undefined
+            });
+            this.prop('placeholderValues', values);
+            
+            if (this.display) {
+                this.display.updateContent(this.prop('content'));
+            }
+        }
+    }
+
+    async loadPrompt(promptId) {
+        try {
+            if (this.prop('currentPromptId') === promptId) return true;
+            
+            if (this.hasUnsavedChanges() && !confirm('You have unsaved changes. Are you sure you want to switch prompts?')) {
+                return false;
+            }
+
+            this.setEditMode(false);
+            
+            const promptData = window.promptApp.data.prompts[promptId];
+            if (!promptData) throw new Error('Prompt not found');
+
+            // Set basic state
+            this.prop('currentPromptId', promptId);
+            this.prop('currentPrompt', { ...promptData, id: promptId });
+            this.prop('pendingChanges', null);
+            this.prop('content', promptData.content);
+            this.prop('placeholderValues', new Map());  // Reset to empty Map
+
+            // Initialize or update components
+            if (!this.editor) {
+                if (!(await this.initializeComponents())) {
+                    throw new Error('Failed to initialize components');
+                }
+            } else {
+                this.isInitializing = true;
+                
+                this.editor.setContent(this.prop('content'));
+                await this.editor.render();
+                
+                this.placeholderManager.checkContent(this.prop('content'));
+                await this.placeholderManager.render();
+                
+                this.display.lastRenderedContent = '';
+                this.display.updateContent(this.prop('content'));
+                await this.display.render();
+                
+                this.isInitializing = false;
+            }
+
+            this.updateTitleState();
+            this.updateFavoriteButton(document.getElementById('favorite-prompt-btn'));
+            this.showPromptView();
+            window.promptApp.sidebar.setActivePrompt(promptId);
+            
+            return true;
+        } catch (error) {
+            console.error('Error loading prompt:', error);
+            this.isInitializing = false;
+            NotificationSystem.show(error.message || 'Error loading prompt', 'error');
+            return false;
+        }
+    }
+
+    async createNewPrompt(folderId) {
+        try {
+            // Set up initial state with empty but initialized maps
+            this.prop('currentPromptId', null);
+            this.prop('currentPrompt', null);
+            this.prop('content', '');
+            this.prop('placeholderValues', new Map());  // Empty but initialized
+            
+            this.prop('pendingChanges', {
+                title: 'New Prompt',
+                content: '',
+                isNew: true,
+                parentId: folderId || 'root'
+            });
+
+            // Initialize components with empty but valid state
+            if (!this.editor) {
+                const success = await this.initializeComponents();
+                if (!success) {
+                    throw new Error('Failed to initialize components');
+                }
+            }
+
+            this.setEditMode(true);
+            this.editor.setContent('');
+            this.placeholderManager.checkContent('');
+            this.display.updateContent('', this.prop('placeholderValues'));
+            
+            this.updateTitleState();
+            const titleElement = document.getElementById('prompt-title');
+            if (titleElement) {
+                titleElement.contentEditable = 'true';
+                titleElement.focus();
+            }
+            
+            this.showPromptView();
+            this.editor.render();
+            
+            return true;
+        } catch (error) {
+            console.error('Error initializing new prompt:', error);
+            NotificationSystem.show('Error initializing new prompt', 'error');
+            return false;
+        }
+    }
+
+    async saveChanges() {
+        if (!this.prop('pendingChanges')) {
+            return;
+        }
+
+        const titleElement = document.getElementById('prompt-title');
+        if (!titleElement) {
+            console.error('No title element found');
+            return;
+        }
+
+        const newTitle = titleElement.textContent.trim();
+        const newContent = this.prop('content').trim();
+
+        if (!this.validateChanges(newTitle, newContent)) {
+            console.error('Validation failed');
+            return;
+        }
+
+        try {
+            const pendingChanges = this.prop('pendingChanges');
+
+            // Explicit check for new prompt
+            const isNewPrompt = pendingChanges.isNew === true;
+            
+            if (isNewPrompt) {
+                // Create new prompt
+                const newPrompt = {
+                    name: newTitle,
+                    content: newContent,
+                    parentId: pendingChanges.parentId || 'root'
+                };
+
+                const promptId = window.promptApp.dataManager.addPrompt(newPrompt);
+                this.prop('currentPromptId', promptId);
+                this.prop('currentPrompt', { ...newPrompt, id: promptId });
+                NotificationSystem.show('New prompt created successfully', 'success');
+            } else {
+                // Check for promptId
+                const promptId = this.prop('currentPromptId');
+                
+                if (!promptId) {
+                    throw new Error('No prompt selected for update');
+                }
+                
+                const updatedPrompt = {
+                    ...this.prop('currentPrompt'),
+                    name: newTitle,
+                    content: newContent,
+                };
+                const success = window.promptApp.updatePrompt(promptId, updatedPrompt);
+                if (!success) {
+                    throw new Error('Failed to update prompt');
+                }
+                this.prop('currentPrompt', { ...updatedPrompt, id: promptId });
+                NotificationSystem.show('Changes saved successfully', 'success');
+            }
+
+            // Reset edit state
+            this.setEditMode(false);
+            
+            // Update child components
+            if (this.editor) this.editor.handleSaveComplete();
+            if (this.placeholderManager) this.placeholderManager.handleSaveComplete();
+            if (this.display) this.display.handleSaveComplete();
+            
+            // Update sidebar selection
+            if (this.prop('currentPromptId')) {
+                window.promptApp.sidebar.setActivePrompt(this.prop('currentPromptId'));
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Error saving prompt:', error);
+            NotificationSystem.show('Error saving prompt', 'error');
+            return false;
+        }
+    }
+
+    cancelEdit() {
+        const pendingChanges = this.prop('pendingChanges');
+        
+        // If this is a new unsaved prompt, close everything
+        if (pendingChanges?.isNew) {
+            this.closePrompt();
+            return;
+        }
+
+        if (!this.prop('currentPrompt') || !pendingChanges) return;
+
+        // Restore original content
+        this.prop('content', this.prop('currentPrompt').content);
+        this.prop('placeholderValues', new Map());
+
+        // Restore title
+        const titleElement = document.getElementById('prompt-title');
+        if (titleElement) {
+            titleElement.textContent = this.prop('currentPrompt').name;
+        }
+
+        // Reset edit mode
+        this.prop('isEditing', false);
+        this.prop('pendingChanges', null);
+
+        // Update child components
+        if (this.editor) this.editor.setContent(this.prop('content'));
+        if (this.placeholderManager) this.placeholderManager.checkContent(this.prop('content'));
+        if (this.display) this.display.updateContent(this.prop('content'), this.prop('placeholderValues'));
+    }
+
+    closePrompt() {
+        // Ensure editor handles close before destroying
+        if (this.editor) {
+            this.editor.handleClose();
+        }
+
+        // Destroy all components
+        this.destroyComponents();
+
+        // Reset state
+        this.prop('currentPromptId', null);
+        this.prop('currentPrompt', null);
+        this.prop('isEditing', false);
+        this.prop('pendingChanges', null);
+        this.prop('content', '');
+        this.prop('placeholderValues', new Map());
+
+        // Show welcome view
+        this.showWelcomeView();
+        window.promptApp.sidebar.setActivePrompt(null);
+    }
+
+    toggleFavorite() {
+        const currentPromptId = this.prop('currentPromptId');
+        if (!currentPromptId) return;
+        
+        // Get current state from central source of truth
+        const currentlyFavorited = window.promptApp.isFavorite(currentPromptId);
+        
+        // Attempt to toggle
+        const success = window.promptApp.toggleFavorite(currentPromptId);
+        
+        if (success) {
+            // Verify the change was successful by checking new state
+            const newFavoriteState = window.promptApp.isFavorite(currentPromptId);
+            if (currentlyFavorited !== newFavoriteState) {
+                // Update prompt view state with latest from central state
+                if (this.prop('currentPrompt')) {
+                    this.prop('currentPrompt', {
+                        ...this.prop('currentPrompt'),
+                        isFavorite: newFavoriteState
+                    });
+                }
+                
+                // Update UI
+                const favoriteBtn = document.getElementById('favorite-prompt-btn');
+                if (favoriteBtn) {
+                    this.updateFavoriteButton(favoriteBtn);
+                }
+            }
+        }
+    }
+
+    updateFavoriteButton(button) {
+        // Always get fresh state from central source
+        const isFavorite = window.promptApp.isFavorite(this.prop('currentPromptId'));
+        
+        button.className = isFavorite 
+            ? 'text-yellow-400 drop-shadow-[0_2px_3px_rgba(250,204,21,0.4)] [text-shadow:_0_0_1px_#B45309]'
+            : 'text-gray-300 hover:text-yellow-400';
+    }
+
+
+    validateChanges(title, content) {
+        if (!title || !content) {
+            NotificationSystem.show('Title and content cannot be empty', 'error');
+            return false;
+        }
+        return true;
+    }
+
+    hasUnsavedChanges() {
+        const pendingChanges = this.prop('pendingChanges');
+        if (!this.prop('isEditing') || !pendingChanges) return false;
+
+        const titleElement = document.getElementById('prompt-title');
+        if (!titleElement) return false;
+
+        return titleElement.textContent.trim() !== pendingChanges.title ||
+               this.prop('content').trim() !== pendingChanges.content;
+    }
+
+    showPromptView() {
+        const welcomeView = document.getElementById('welcome-view');
+        if (welcomeView) welcomeView.classList.add('hidden');
+        if (this.container) this.container.classList.remove('hidden');
+    }
+
+    showWelcomeView() {
+        if (this.container) this.container.classList.add('hidden');
+        const welcomeView = document.getElementById('welcome-view');
+        if (welcomeView) {
+            welcomeView.classList.remove('hidden');
+            if (window.promptApp.welcome) {
+                window.promptApp.welcome.render();
+            }
+        }
+    }
+
+    render() {
+        try {
+            if (!this.container) return;
+
+            if (this.prop('currentPrompt') || this.prop('isEditing')) {
+                this.updateTitleState();
+                this.updateUIControls();
+                
+                // Render child components if they exist
+                if (this.editor) this.editor.render();
+                if (this.placeholderManager) this.placeholderManager.render();
+                if (this.display) this.display.render();
+            }
+
+            this.setupEventListeners();
+
+        } catch (error) {
+            console.error('Error rendering prompt view:', error);
+            NotificationSystem.show('Error rendering prompt view', 'error');
+        }
+    }
+
+    updateTitleState() {
+        const titleElement = document.getElementById('prompt-title');
+        if (titleElement) {
+            titleElement.textContent = this.prop('isEditing') && !this.prop('currentPrompt')?.name 
+                ? '' 
+                : this.prop('currentPrompt')?.name || 'New Prompt';
+        }
+    }
+
+    updateUIControls() {
+        // Update favorite button state
+        const favoriteBtn = document.getElementById('favorite-prompt-btn');
+        if (favoriteBtn && this.prop('currentPrompt')) {
+            this.updateFavoriteButton(favoriteBtn);
+        }
+    }
+
+    destroy() {
+        this.eventHandler.unbindAll();
+        this.destroyComponents();
+        
+        // Reset all state
+        this._ = {
+            currentPromptId: null,
+            currentPrompt: null,
+            isEditing: false,
+            pendingChanges: null,
+            content: '',
+            placeholderValues: new Map()
+        };
+        
+        this.container = null;
+    }
+
+    refresh() {
+        const currentPromptId = this.prop('currentPromptId');
+        if (currentPromptId) {
+            const updatedPrompt = window.promptApp.data.prompts[currentPromptId];
+            if (updatedPrompt) {
+                this.prop('currentPrompt', { ...updatedPrompt, id: currentPromptId });
+                this.render();
+            } else {
+                this.closePrompt();
+            }
+        }
+    }
+
+    // Getter shortcuts for frequently accessed properties
+    get isEditing() {
+        return this.prop('isEditing');
+    }
+
+    get content() {
+        return this.prop('content');
+    }
+
+    get currentPrompt() {
+        return this.prop('currentPrompt');
+    }
+
+    get placeholderValues() {
+        return this.prop('placeholderValues');
+    }
+
+    get pendingChanges() {
+        return this.prop('pendingChanges');
+    }
+}
+
+/*
+====================================
+    Prompt Editor Component
+====================================
+*/
+class PromptEditor extends BaseComponent {
+    constructor(manager) {
+        super();
+        this.manager = manager;
+        this.content = '';
+
+        // DOM elements
+        this.editorContainer = null;
+        this.editButton = null;
+        this.contentArea = null;
+        this.titleElement = null;
+        this.saveBtn = null;
+        this.cancelBtn = null;
+    }
+
+    get isEditing() {
+        return this.manager.isEditing;
+    }
+
+    initialize() {
+        // Get DOM elements
+        this.editorContainer = document.getElementById('prompt-editor');
+        this.editButton = document.getElementById('edit-prompt-btn');
+        this.contentArea = document.getElementById('prompt-content');
+        this.titleElement = document.getElementById('prompt-title');
+        this.saveBtn = document.getElementById('save-prompt-btn');
+        this.cancelBtn = document.getElementById('cancel-edit-btn');
+
+        if (!this.validateElements()) {
+            console.error('Required editor elements not found');
+            return false;
+        }
+
+        this.setupEventListeners();
+        return true;
+    }
+
+    syncEditState(isEditing) {
+        if (isEditing) {
+            this.setContent(this.manager.content);
+        }
+        this.render();
+    }
+
+    validateElements() {
+        return this.editorContainer && 
+               this.editButton && 
+               this.contentArea && 
+               this.titleElement &&
+               this.saveBtn &&
+               this.cancelBtn;
+    }
+
+    setupEventListeners() {
+        // Edit button toggle
+        this.eventHandler.bind(this.editButton, 'click', () => this.toggleEditMode());
+        
+        // Content changes
+        this.eventHandler.bind(this.contentArea, 'input', (e) => {
+            this.handleContentChange(e);
+            this.adjustTextareaHeight();
+        });
+
+        // Title changes
+        this.eventHandler.bind(this.titleElement, 'input', (e) => {
+            this.handleTitleChange(e);
+        });
+
+        // Save/Cancel buttons
+        this.eventHandler.bind(this.saveBtn, 'click', () => this.manager.saveChanges());
+        this.eventHandler.bind(this.cancelBtn, 'click', () => {
+            this.manager.cancelEdit();
+            this.render();
+        });
+
+        // Keyboard shortcuts
+        this.eventHandler.bind(this.contentArea, 'keydown', this.handleKeyboardShortcut.bind(this));
+    }
+
+    handleKeyboardShortcut(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+            e.preventDefault();
+            this.manager.saveChanges();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            this.manager.cancelEdit();
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            this.handleTabIndent(e.shiftKey);
+        }
+    }
+
+    handleTabIndent(isShiftTab) {
+        const textarea = this.contentArea;
+        if (!textarea) return;
+
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+
+        // Handle multi-line selection
+        if (start !== end && value.slice(start, end).includes('\n')) {
+            this.handleMultiLineIndent(isShiftTab);
+            return;
+        }
+
+        // Handle single line
+        if (!isShiftTab) {
+            const newValue = value.slice(0, start) + '    ' + value.slice(end);
+            textarea.value = newValue;
+            textarea.selectionStart = textarea.selectionEnd = start + 4;
+        } else {
+            const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+            const lineUpToStart = value.slice(lineStart, start);
+            if (lineUpToStart.match(/^(?: {1,4}|\t)/)) {
+                const spacesToRemove = lineUpToStart.match(/^( {1,4}|\t)/)[0].length;
+                textarea.value = value.slice(0, lineStart) + 
+                               lineUpToStart.slice(spacesToRemove) + 
+                               value.slice(end);
+                textarea.selectionStart = textarea.selectionEnd = 
+                    Math.max(lineStart, start - spacesToRemove);
+            }
+        }
+
+        this.handleContentChange({ target: textarea });
+    }
+
+    handleMultiLineIndent(isShiftTab) {
+        const textarea = this.contentArea;
+        if (!textarea) return;
+
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const value = textarea.value;
+
+        const startLine = value.lastIndexOf('\n', start - 1) + 1;
+        const endLine = end === value.length ? end : value.indexOf('\n', end);
+        const selectedText = value.slice(startLine, endLine === -1 ? value.length : endLine);
+        const lines = selectedText.split('\n');
+
+        const processedLines = lines.map(line => {
+            if (isShiftTab) {
+                return line.replace(/^( {1,4}|\t)/, '');
+            } else {
+                return '    ' + line;
+            }
+        });
+
+        const newText = processedLines.join('\n');
+        const beforeText = value.slice(0, startLine);
+        const afterText = value.slice(endLine === -1 ? value.length : endLine);
+
+        textarea.value = beforeText + newText + afterText;
+        textarea.selectionStart = startLine;
+        textarea.selectionEnd = startLine + newText.length;
+
+        this.handleContentChange({ target: textarea });
+    }
+
+    toggleEditMode() {
+        // Use manager's method instead of handling locally
+        this.manager.setEditMode(!this.isEditing);
+    }
+
+    handleContentChange(e) {
+        if (!this.isEditing) return;
+        const newContent = e.target.value;
+        this.content = newContent;
+        this.manager.handleEditorContentChange(newContent);
+    }
+
+    handleTitleChange(e) {
+        if (!this.isEditing) return;
+        const newTitle = e.target.textContent.trim();
+        this.manager.handleTitleChange(newTitle);
+    }
+
+    adjustTextareaHeight() {
+        if (!this.contentArea) return;
+        this.contentArea.style.height = 'auto';
+        const newHeight = Math.min(500, Math.max(200, this.contentArea.scrollHeight));
+        this.contentArea.style.height = `${newHeight}px`;
+    }
+
+    setContent(content) {
+        this.content = content;
+        if (this.contentArea) {
+            this.contentArea.value = content;
+            this.adjustTextareaHeight();
+        }
+    }
+
+    handleSaveComplete() {
+        // Instead of setting isEditing directly, use the manager's method
+        this.manager.setEditMode(false);
+        this.render();
+    }
+
+    handleCancel() {
+        // Also update this method for consistency
+        this.manager.setEditMode(false);
+        this.render();
+    }
+
+    handleClose() {
+        // And this one
+        this.manager.setEditMode(false);
+        this.content = '';
+        
+        // Clear references before render
+        this.editorContainer = null;
+        this.editButton = null;
+        this.contentArea = null;
+        this.titleElement = null;
+        this.saveBtn = null;
+        this.cancelBtn = null;
+    }
+
+    startNewPrompt() {
+        this.manager.setEditMode(true);  // Use manager's method instead of direct assignment
+        this.content = '';
+        this.render();
+        
+        // Focus title for new prompts
+        if (this.titleElement) {
+            this.titleElement.focus();
+        }
+    }
+
+    render() {
+        // Update edit button appearance
+        if (this.editButton) {
+            this.editButton.classList.toggle('text-error', this.isEditing);
+            this.editButton.title = this.isEditing ? 'Cancel Editing' : 'Edit Prompt';
+        }
+
+        // Toggle editor visibility
+        if (this.editorContainer) {
+            this.editorContainer.classList.toggle('hidden', !this.isEditing);
+            // Recalculate height when editor becomes visible
+            if (this.isEditing && this.contentArea) {
+                // Use setTimeout to ensure the element is visible first
+                setTimeout(() => this.adjustTextareaHeight(), 0);
+            }
+        }
+        
+        if (this.saveBtn) {
+            this.saveBtn.classList.toggle('hidden', !this.isEditing);
+        }
+        
+        if (this.cancelBtn) {
+            this.cancelBtn.classList.toggle('hidden', !this.isEditing);
+        }
+
+        // Toggle title editability
+        if (this.titleElement) {
+            this.titleElement.contentEditable = this.isEditing ? 'true' : 'false';
+
+            // Handle new prompt placeholder
+            if (this.isEditing && !this.titleElement.textContent.trim()) {
+                this.titleElement.setAttribute('placeholder', 'Enter prompt title...');
+            } else {
+                this.titleElement.removeAttribute('placeholder');
+            }
+        }
+    }
+
+    destroy() {
+        this.eventHandler.unbindAll();
+        // Remove direct isEditing assignment
+        this.content = '';
+
+        // Clear DOM references
+        this.editorContainer = null;
+        this.editButton = null;
+        this.contentArea = null;
+        this.titleElement = null;
+        this.saveBtn = null;
+        this.cancelBtn = null;
+
+        // Clear manager reference last
+        this.manager = null;
+    }
+}
+
+/*
+====================================
+    Placeholder Manager Component
+====================================
+*/
+class PlaceholderManager extends BaseComponent {
+    constructor(manager) {
+        super();
+        this.manager = manager;
+        this.container = null;
+        this.renderInProgress = false;
+        this.textProcessor = new TextProcessor();
+        this.handleInputChange = this.handleInputChange.bind(this);
+    }
+
+    initialize() {
+        try {
+            // Get container first
+            this.container = document.getElementById('placeholder-inputs');
+            if (!this.container) {
+                console.error('❌ PlaceholderManager: Container not found');
+                return false;
+            }
+
+            // Process initial content if available
+            const initialContent = this.manager.prop('content');
+            if (initialContent) {
+                this.checkContent(initialContent);
+            }
+
+            return true;
+        } catch (error) {
+            console.error('❌ PlaceholderManager: Initialization error:', error);
+            return false;
+        }
+    }
+
+    handleEditModeChange(isEditing) {
+        this.render();
+    }
+
+    handleSaveComplete() {
+        this.render();
+    }
+
+    handleClose() {
+        this.render();
+    }
+
+    checkContent(content) {
+        if (!content) return;
+        
+        const newPlaceholders = this.textProcessor.parsePlaceholders(content);
+        const currentValues = this.manager.prop('placeholderValues');
+        
+        // Track which placeholders still exist
+        const remainingPlaceholders = new Set();
+        
+        // Update or add placeholders while preserving values
+        newPlaceholders.forEach((details, name) => {
+            remainingPlaceholders.add(name);
+            
+            const existing = currentValues.get(name);
+            if (existing) {
+                // Preserve the existing value unless type changed
+                if (existing.type === details.type) {
+                    details.value = existing.value;
+                }
+            }
+            
+            this.manager.updatePlaceholderDefinition(name, details);
+        });
+        
+        // Remove placeholders that no longer exist
+        currentValues.forEach((_, name) => {
+            if (!remainingPlaceholders.has(name)) {
+                currentValues.delete(name);
+            }
+        });
+        
+        // Force a render update if placeholders changed
+        if (this.container && !this.renderInProgress) {
+            this.render();
+        }
+    }
+
+    render() {
+        if (!this.container || this.renderInProgress) return;
+
+        try {
+            this.renderInProgress = true;
+
+            const placeholders = this.manager.prop('placeholderValues');
+            if (placeholders.size === 0) {
+                this.container.classList.add('hidden');
+                return;
+            }
+
+            this.container.classList.remove('hidden');
+            this.updateInputGrid();
+            this.setupEventHandlers();
+
+        } finally {
+            this.renderInProgress = false;
+        }
+    }
+
+    updateInputGrid() {
+        let gridContainer = this.container.querySelector('.grid');
+        if (!gridContainer) {
+            this.container.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            `;
+            gridContainer = this.container.querySelector('.grid');
+        }
+
+        const placeholders = this.manager.prop('placeholderValues');
+        const inputsHTML = Array.from(placeholders.entries())
+            .map(([name, placeholder]) => {
+                const inputHTML = this.createInputHTML(name, placeholder);
+                return this.createInputWrapper(name, placeholder, inputHTML);
+            })
+            .join('');
+
+        gridContainer.innerHTML = inputsHTML;
+    }
+
+    createInputHTML(name, details) {
+        const baseClasses = `
+            mt-1 block w-full rounded-md bg-white dark:bg-gray-700
+            focus:border-primary dark:focus:border-primary 
+            focus:ring-1 focus:ring-primary dark:focus:ring-primary focus:ring-opacity-50
+            transition-all duration-200 
+            placeholder-gray-400 dark:placeholder-gray-500
+            border border-gray-200 dark:border-gray-600 
+            text-gray-900 dark:text-gray-100
+            p-2
+        `.trim();
+
+        switch (details.type.toLowerCase()) {
+            case 'bool':
+            case 'boolean':
+                return this.createBooleanInput(name, details, baseClasses);
+            case 'select':
+                return this.createSelectInput(name, details, baseClasses);
+            case 'text':
+                return this.createTextareaInput(name, details, baseClasses);
+            case 'int':
+                return this.createNumberInput(name, details, baseClasses, '1');
+            case 'float':
+                return this.createNumberInput(name, details, baseClasses, '0.01');
+            case 'date':
+                return this.createDateInput(name, details, baseClasses);
+            case 'radio':
+                return this.createRadioInput(name, details, baseClasses);
+            default:
+                return this.createTextInput(name, details, baseClasses);
+        }
+    }
+
+    createInputWrapper(name, details, inputHTML) {
+        return `
+            <div class="flex flex-col ${details.type.toLowerCase() === 'text' ? 'md:col-span-2' : ''}">
+                <label class="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1">
+                    ${details.displayName}
+                </label>
+                ${inputHTML}
+                ${details.isHidden ? `
+                    <span class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        (Hidden in output)
+                    </span>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    createBooleanInput(name, details, baseClasses) {
+        const options = details.options || ['False', 'True'];
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value ?? 0; // Default to false (0)
+        
+        return `
+            <div class="${baseClasses} flex items-center justify-between">
+                <label class="inline-flex items-center cursor-pointer relative">
+                    <input type="checkbox" 
+                        class="peer absolute w-full h-full top-0 left-0 z-10 opacity-0 cursor-pointer" 
+                        data-role="switch-input"
+                        data-placeholder="${name}"
+                        data-options="${options[0]},${options[1]}"
+                        ${currentValue === 1 ? 'checked' : ''}>  <!-- Checked when value is 1 (true) -->
+                    <div class="relative w-11 h-6 bg-gray-200 dark:bg-gray-600
+                        peer-focus:outline-none peer-focus:ring-2 
+                        peer-focus:ring-primary/20 dark:peer-focus:ring-primary/40
+                        rounded-full peer peer-checked:after:translate-x-full 
+                        peer-checked:after:border-white peer-checked:bg-primary
+                        after:content-[''] after:absolute after:top-0.5 
+                        after:left-[2px] after:bg-white dark:after:bg-gray-200 
+                        after:border-gray-300 dark:after:border-gray-600
+                        after:border after:rounded-full after:h-5 
+                        after:w-5 after:transition-all">
+                    </div>
+                    <span class="ml-3 text-gray-600 dark:text-gray-300 select-none" data-role="value-display">
+                        ${options[currentValue]}
+                    </span>
+                </label>
+            </div>
+        `;
+    }
+
+    createSelectInput(name, details, baseClasses) {
+        const options = details.options || [];
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value;
+        
+        return `
+            <select 
+                class="${baseClasses}"
+                data-placeholder="${name}">
+                <option value="" class="dark:bg-gray-700">Select ${details.displayName}...</option>
+                ${options.map((option, index) => `
+                    <option value="${index}" 
+                        class="dark:bg-gray-700" 
+                        ${currentValue === index ? 'selected' : ''}>
+                        ${option.trim()}
+                    </option>
+                `).join('')}
+            </select>
+        `;
+    }
+
+    createRadioInput(name, details, baseClasses) {
+        const options = details.options || [];
+        const containerClasses = `${baseClasses} space-y-2 p-2`;
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value;
+        
+        return `
+            <div class="${containerClasses}">
+                ${options.map((option, index) => `
+                    <label class="inline-flex items-center space-x-2 cursor-pointer">
+                        <input type="radio" 
+                            name="${name}"
+                            value="${index}"
+                            data-placeholder="${name}"
+                            class="form-radio text-primary focus:ring-primary dark:focus:ring-primary/40
+                                border-gray-300 dark:border-gray-600
+                                bg-white dark:bg-gray-700"
+                            ${currentValue === index ? 'checked' : ''}>
+                        <span class="text-gray-700 dark:text-gray-300">${option.trim()}</span>
+                    </label>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    createTextareaInput(name, details, baseClasses) {
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value || '';
+        return `
+            <textarea 
+                class="${baseClasses} min-h-[100px] resize-y"
+                data-placeholder="${name}"
+                placeholder="Enter ${details.displayName}..."
+            >${currentValue}</textarea>
+        `;
+    }
+
+    createNumberInput(name, details, baseClasses, step) {
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value || '';
+        return `
+            <input 
+                type="number"
+                class="${baseClasses}"
+                data-placeholder="${name}"
+                step="${step}"
+                value="${currentValue}"
+                placeholder="Enter ${details.displayName}..."
+            >
+        `;
+    }
+
+    createDateInput(name, details, baseClasses) {
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value || '';
+        return `
+            <input 
+                type="date"
+                class="${baseClasses}"
+                data-placeholder="${name}"
+                value="${currentValue}"
+            >
+        `;
+    }
+
+    createTextInput(name, details, baseClasses) {
+        const currentValue = this.manager.prop('placeholderValues').get(name)?.value || '';
+        return `
+            <input 
+                type="text"
+                class="${baseClasses}"
+                data-placeholder="${name}"
+                value="${currentValue}"
+                placeholder="Enter ${details.displayName}..."
+            >
+        `;
+    }
+
+    setupEventHandlers() {
+        this.eventHandler.unbindAll();
+
+        const inputs = this.container.querySelectorAll('[data-placeholder]');
+        
+        inputs.forEach(input => {
+            const name = input.dataset.placeholder;
+            const handler = this.handleInputChange.bind(this, name);
+            
+            if (input.matches('[data-role="switch-input"]')) {
+                this.eventHandler.bind(input, 'change', handler);
+            } else if (input.type === 'radio') {
+                this.eventHandler.bind(input, 'change', handler);
+            } else if (input.tagName.toLowerCase() === 'textarea') {
+                this.eventHandler.bind(input, 'input', (e) => {
+                    handler(e);
+                    this.adjustTextareaHeight(input);
+                });
+            } else {
+                this.eventHandler.bind(input, 'input', handler);
+            }
+        });
+    }
+
+    adjustTextareaHeight(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = `${Math.min(200, Math.max(100, textarea.scrollHeight))}px`;
+    }
+
+    handleInputChange(name, event) {
+        const input = event.target;
+        const placeholders = this.manager.prop('placeholderValues');
+        const placeholder = placeholders.get(name);
+        
+        if (!placeholder) return;
+
+        let value;
+        if (input.matches('[data-role="switch-input"]')) {
+            value = input.checked ? 1 : 0;  // When checked=true, value=1
+            const options = input.dataset.options?.split(',') || ['True', 'False'];
+            const display = input.parentElement.querySelector('[data-role="value-display"]');
+            if (display) {
+                display.textContent = options[value];  // Fixed - use value directly as index
+            }
+        } else if (input.type === 'radio' || input.tagName.toLowerCase() === 'select') {
+            value = parseInt(input.value, 10);
+        } else {
+            value = input.value;
+        }
+
+        this.manager.handlePlaceholderValueChange(name, value);
+    }
+
+    destroy() {
+        this.eventHandler.unbindAll();
+        this.renderInProgress = false;
+        
+        if (this.container) {
+            this.container.innerHTML = '';
+        }
+        
+        this.container = null;
+        this.manager = null;
+        this.textProcessor = null;
+    }
+}
+
+/*
+====================================
+    Prompt Display Component
+====================================
+*/
+class PromptDisplay extends BaseComponent {
+    constructor(manager) {
+        super();
+        this.manager = manager;
+        this.textProcessor = new TextProcessor();
+        
+        // Core state
+        this.currentContent = '';
+        this.lastRenderedContent = '';
+        this.isEditing = false;
+        this.renderInProgress = false;
+
+        // DOM elements
+        this.container = null;
+        this.contentContainer = null;
+        this.copyButton = null;
+    }
+
+    async initialize() {
+        this.container = document.getElementById('prompt-display');
+        if (!this.container) {
+            console.error('Display container not found');
+            return false;
+        }
+
+        this.setupStructure();
+        this.setupEventListeners();
+        return true;
+    }
+
+    async render() {
+        if (!this.container || this.renderInProgress) return;
+
+        try {
+            this.renderInProgress = true;
+            
+            // Force content update from manager if empty
+            if (!this.currentContent) {
+                this.currentContent = this.manager.prop('content') || '';
+            }
+            
+            if (!this.currentContent) {
+                this.updateDOM(`
+                    <div class="text-gray-400 italic text-center p-4">
+                        Enter your prompt content to see it displayed here...
+                    </div>
+                `);
+                return;
+            }
+
+            this.processContent(this.currentContent);
+        } finally {
+            this.renderInProgress = false;
+        }
+    }
+
+    setupStructure() {
+        this.container.innerHTML = this.getDisplayStructure();
+        this.contentContainer = this.container.querySelector('.markdown-content');
+        this.copyButton = this.container.querySelector('#copy-prompt-btn');
+    }
+
+    getDisplayStructure() {
+        return `
+            <div class="relative">
+                <div class="markdown-content p-4 pb-12 prose prose-gray dark:prose-invert max-w-none">
+                    <div class="text-gray-400 dark:text-gray-500 italic text-center p-4">
+                        Enter your prompt content to see it displayed here...
+                    </div>
+                </div>
+                <button id="copy-prompt-btn"
+                    class="absolute bottom-2 right-2 bg-primary text-white p-2 rounded-full 
+                        shadow-lg hover:bg-primary/80 transition-colors">
+                    <i class="fas fa-copy"></i>
+                </button>
+            </div>
+        `;
+    }
+
+    setupEventListeners() {
+        if (this.copyButton) {
+            this.eventHandler.bind(this.copyButton, 'click', () => {
+                return this.handleCopy();
+            });
+        }
+    }
+
+    checkContent(content) {
+        const placeholders = this.textProcessor.parsePlaceholders(content);
+        placeholders.forEach((details, name) => {
+            this.manager.updatePlaceholderDefinition(name, details);
+        });
+        this.render();
+    }
+
+    async processContent(content, rawMode = false) {
+        const placeholderValues = this.manager.prop('placeholderValues');
+        const processedContent = this.textProcessor.processText(
+            content, 
+            placeholderValues,
+            rawMode, 
+            !rawMode
+        );
+        
+        if (!rawMode) {
+            await this.updateDOM(processedContent);
+        }
+        
+        return processedContent;
+    }
+
+    async updateDOM(content) {
+        if (!this.contentContainer) return;
+
+        const sanitizedContent = content.replace(/\s+/g, ' ').trim();
+        if (sanitizedContent !== this.lastRenderedContent) {
+            // Add language class
+            const contentWithLanguage = content.replace(
+                /<pre><code>/g, 
+                '<pre><code class="language-">'
+            );
+            this.contentContainer.innerHTML = contentWithLanguage;
+            this.lastRenderedContent = sanitizedContent;
+        }
+    }
+
+    async handleCopy() {
+        try {
+            const content = this.manager?.prop('content');
+            const placeholderValues = this.manager?.prop('placeholderValues');
+            const rawContent = this.textProcessor.processText(
+                content,
+                placeholderValues,
+                true
+            );
+
+            await navigator.clipboard.writeText(rawContent);
+            this.showCopySuccess();
+        } catch (error) {
+            console.error('❌ Copy failed:', {
+                error,
+                errorStack: error.stack,
+                displayInstance: this,
+                manager: this.manager,
+                textProcessor: this.textProcessor
+            });
+            NotificationSystem.show('Failed to copy prompt', 'error');
+        }
+    }
+
+    showCopySuccess() {
+        if (!this.copyButton) return;
+
+        this.copyButton.innerHTML = '<i class="fas fa-check"></i>';
+        this.copyButton.classList.remove('bg-primary');
+        this.copyButton.classList.add('bg-success');
+        
+        setTimeout(() => {
+            this.copyButton.innerHTML = '<i class="fas fa-copy"></i>';
+            this.copyButton.classList.remove('bg-success');
+            this.copyButton.classList.add('bg-primary');
+        }, 2000);
+        
+        NotificationSystem.show('Prompt copied to clipboard!', 'success');
+    }
+
+    handleEditModeChange(isEditing) {
+        this.isEditing = isEditing;
+        this.render();
+    }
+
+    handleSaveComplete() {
+        this.render();
+    }
+
+    handleClose() {
+        this.currentContent = '';
+        this.lastRenderedContent = '';
+        this.render();
+    }
+
+    async updateContent(content) {
+        if (!this.contentContainer) return;
+        
+        this.currentContent = content;
+        await this.processContent(content);
+    }
+
+    destroy() {
+        this.eventHandler.unbindAll();
+        
+        this.currentContent = '';
+        this.lastRenderedContent = '';
+        this.isEditing = false;
+        this.renderInProgress = false;
+        
+        if (this.contentContainer) {
+            this.contentContainer.innerHTML = '';
+        }
+        
+        this.container = null;
+        this.contentContainer = null;
+        this.copyButton = null;
+        this.manager = null;
+    }
+}
+
+/*
+====================================
+    Text Processor Component
+====================================
+*/
+class TextProcessor {
+    static PLACEHOLDER_PATTERN = /<(!?)(?:([^:>]+):([^>\[]+)(?:\s*\[([^\]]+)\])?(?:=([^>]+))?|([^>]+))>/g;
+    static HIGHLIGHT_MARKER_PATTERN = /(<!--BEGIN_IF_HIGHLIGHT-->.*?<!--END_IF_HIGHLIGHT-->)/gs;
+    static HTML_TAG_PATTERN = /<\/?(?!(div|span|p|br|strong|em|h[1-6]|ul|li|ol|code|pre)(\s+[^>]*)?\/?>)([\w-]+)((\s+[^>]*)?\/?)>/g;
+
+    constructor() {
+        this.ifProcessor = new IfProcessor();
+    }
+
+    processText(content, placeholderValues = new Map(), rawMode = false, useMarkdown = true) {
+        try {
+            let processedContent = this.ifProcessor.processConditionals(content, placeholderValues);
+            const definedPlaceholders = this.getDefinedPlaceholders(processedContent);
+
+            if (rawMode) {
+                const result = this.processPlaceholders(
+                    processedContent, 
+                    placeholderValues, 
+                    definedPlaceholders, 
+                    true
+                ).trim();
+                return result;
+            }
+
+            processedContent = this.processHighlightMarkers(processedContent);
+            processedContent = this.processPlaceholders(
+                processedContent, 
+                placeholderValues, 
+                definedPlaceholders,
+                false
+            );
+            // Updated replacement to preserve original tag content
+            processedContent = processedContent.replace(
+                TextProcessor.HTML_TAG_PATTERN, 
+                (match) => match.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            );
+            
+            if (useMarkdown) {
+                processedContent = marked.parse(processedContent);
+            }
+            return processedContent;
+
+        } catch (error) {
+            console.error('❌ TextProcessor.processText error:', {
+                error,
+                contentPreview: content?.substring(0, 100) + (content?.length > 100 ? '...' : ''),
+                placeholderValuesType: placeholderValues?.constructor?.name
+            });
+            return rawMode ? content?.trim() : '';
+        }
+    }
+
+    // Rest of the methods remain unchanged...
+    getDefinedPlaceholders(content) {
+        const definedPlaceholders = new Set();
+        content.match(TextProcessor.PLACEHOLDER_PATTERN)?.forEach(match => {
+            const [, , name] = match.match(/<(!?)([^:>]+):/) || [];
+            if (name) definedPlaceholders.add(name.trim());
+        });
+        return definedPlaceholders;
+    }
+
+    processHighlightMarkers(content) {
+        const parts = content.split(TextProcessor.HIGHLIGHT_MARKER_PATTERN);
+        return parts.map(part => {
+            if (part.startsWith('<!--BEGIN_IF_HIGHLIGHT-->')) {
+                return part.replace('<!--BEGIN_IF_HIGHLIGHT-->', '')
+                         .replace('<!--END_IF_HIGHLIGHT-->', '');
+            }
+            return part;
+        }).join('');
+    }
+
+    parsePlaceholders(content) {
+        const placeholders = new Map();
+        const placeholderRegex = /<(!?)([^:>]+):([^>\[]+)(?:\s*\[([^\]]+)\])?(?:\s*=\s*([^>]*))?>/g;
+        
+        let match;
+        while ((match = placeholderRegex.exec(content)) !== null) {
+            const [_, isHidden, name, type, options, defaultInTag] = match;
+            const cleanType = type.trim().toLowerCase();
+            
+            const details = {
+                type: cleanType,
+                isHidden: isHidden === '!',
+                displayName: name
+            };
+
+            // Handle boolean types
+            if (['boolean', 'bool'].includes(cleanType)) {
+                details.options = options ? options.split(',').map(o => o.trim()) : ['False', 'True'];
+                details.value = 0; 
+            }
+
+            // Handle other option types
+            else if (options) {
+                details.options = options.split(',').map(o => o.trim());
+                if (['radio', 'select'].includes(cleanType) && details.options.length > 0) {
+                    if (defaultInTag) {
+                        const index = details.options.findIndex(opt => 
+                            opt.trim().toLowerCase() === defaultInTag.trim().toLowerCase());
+                        details.value = index >= 0 ? index : 0;
+                    } else {
+                        details.value = 0;
+                    }
+                }
+            }
+            placeholders.set(name, details);
+        }
+
+        return placeholders;
+    }
+
+    processPlaceholders(content, placeholders, definedPlaceholders, rawMode = false) {
+        return content.replace(
+            TextProcessor.PLACEHOLDER_PATTERN,
+            (match, isHidden, name, type, placeholderOptions, defaultValue, simpleName) => {
+                const cleanName = (name || simpleName)?.trim();
+                if (!cleanName) return match;
+                
+                if (simpleName && !definedPlaceholders.has(simpleName.trim())) {
+                    return match;
+                }
+
+                const placeholder = placeholders.get(cleanName);
+                if (!placeholder) return match;
+
+                if (placeholder.isHidden) return '';
+                
+                let displayValue = '';
+                if (['radio', 'select'].includes(placeholder.type)) {
+                    displayValue = placeholder.options[placeholder.value];
+                } else if (['boolean', 'bool'].includes(placeholder.type)) {
+                    displayValue = placeholder.options[placeholder.value]; // Just use value as index
+                } else {
+                    displayValue = placeholder.value;
+                }
+                
+                if (rawMode) {
+                    return displayValue || `<${cleanName}>`;
+                }
+
+                if (displayValue !== undefined && displayValue !== null) {
+                    const escapedValue = String(displayValue).replace(/[<>&]/g, char => ({
+                        '<': '&lt;',
+                        '>': '&gt;',
+                        '&': '&amp;'
+                    }[char]));
+                    return `<span class="placeholder-content inline-block px-1 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm font-mono whitespace-pre-wrap" role="region" aria-label="placeholder ${cleanName}">${escapedValue}</span>`;
+                }
+                
+                return `<span class="inline-block px-1 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-sm font-mono" role="region" aria-label="empty placeholder ${cleanName}">&lt;${cleanName}&gt;</span>`;
+            }
+        );
+    }
+}
+
+class IfProcessor {
+    constructor() {
+        this.conditionalHighlights = [
+            'bg-blue-50 text-blue-700 dark:bg-blue-900 dark:text-blue-200',
+            'bg-blue-100 text-blue-800 dark:bg-blue-800 dark:text-blue-100',
+            'bg-blue-200 text-blue-900 dark:bg-blue-700 dark:text-blue-50',
+            'bg-blue-300 text-blue-900 dark:bg-blue-600 dark:text-blue-50'
+        ];
+    }
+
+    processConditionals(content, values, mode = 'display') {
+        // Store values map for use in evaluation
+        this.values = values instanceof Map ? values : new Map();
+        let result = '';
+
+        try {
+            while (content.length > 0) {
+                const currentChar = content[0];
+                
+                if (currentChar === '{' && content.startsWith('{if')) {
+                    const { ifBlock, remaining } = this.extractIfBlock(content);
+                    if (!ifBlock) {
+                        result += currentChar;
+                        content = content.slice(1);
+                        continue;
+                    }
+
+                    const processedResult = this.processIfStatement(ifBlock);
+                    content = processedResult.content + remaining;
+                } else {
+                    result += currentChar;
+                    content = content.slice(1);
+                }
+            }
+            return result;
+        } catch (error) {
+            console.error('Error in processConditionals:', error);
+            return content;
+        }
+    }
+
+    extractIfBlock(content) {
+        let depth = 1;
+        let position = 3; // Skip initial '{if'
+        
+        while (position < content.length) {
+            if (content.startsWith('{if', position)) {
+                depth++;
+                position += 3;
+            } else if (content.startsWith('{/if}', position)) {
+                depth--;
+                if (depth === 0) {
+                    // Found the matching end of our initial if
+                    const ifBlock = content.substring(0, position + 5); // Include the {/if}
+                    const remaining = content.slice(position + 5);
+                    return { ifBlock, remaining };
+                }
+                position += 5;
+            } else {
+                position++;
+            }
+        }
+        
+        return { ifBlock: null, remaining: content };
+    }
+
+    processIfStatement(ifStatement) {
+        try {
+            const conditions = this.splitIfConditions(ifStatement);
+            
+            let result = '';
+            for (const {condition, content} of conditions) {
+                
+                // If this is an else block (no condition) or condition evaluates true
+                if (!condition || this.evaluateCondition(condition).result) {
+                    // Process nested conditionals in the content
+                    const processedContent = this.processConditionals(content, this.values);
+                    return { content: processedContent };
+                }
+            }
+            return { content: '' };
+        } catch (error) {
+            console.error("Error processing if statement:", error);
+            return { error: error.message, content: '' };
+        }
+    }
+
+    splitIfConditions(ifStatement) {
+        const firstClosingBrace = ifStatement.indexOf('}');
+        const mainCondition = ifStatement.slice(3, firstClosingBrace).trim();
+        const innerContent = ifStatement.slice(firstClosingBrace + 1, ifStatement.lastIndexOf('{/if}'));
+        
+        const conditions = [];
+        let currentPos = 0;
+        let currentCondition = mainCondition;
+        
+        while (currentPos < innerContent.length) {
+            const elseIfStart = this.findTopLevelElseIf(innerContent, currentPos);
+            const elseStart = this.findTopLevelElse(innerContent, currentPos);
+            
+            if (elseIfStart === -1 && elseStart === -1) {
+                // No more else/else if, add remaining content
+                conditions.push({
+                    condition: currentCondition,
+                    content: innerContent.slice(currentPos)
+                });
+                break;
+            }
+            
+            if (elseIfStart !== -1 && (elseStart === -1 || elseIfStart < elseStart)) {
+                // Found else if
+                const endOfElseIf = innerContent.indexOf('}', elseIfStart);
+                const elseIfCondition = innerContent.slice(elseIfStart + 8, endOfElseIf).trim();
+                
+                // Add current section
+                conditions.push({
+                    condition: currentCondition,
+                    content: innerContent.slice(currentPos, elseIfStart)
+                });
+                
+                // Update for next section
+                currentPos = endOfElseIf + 1;
+                currentCondition = elseIfCondition;
+                
+            } else {
+                // Found else
+                conditions.push({
+                    condition: currentCondition,
+                    content: innerContent.slice(currentPos, elseStart)
+                });
+                conditions.push({
+                    condition: null,
+                    content: innerContent.slice(elseStart + 6)
+                });
+                break;
+            }
+        }
+        return conditions;
+    }
+
+    findTopLevelElseIf(content, startPos) {
+        let depth = 0;
+        let pos = startPos;
+        
+        while (pos < content.length) {
+            if (content.startsWith('{if', pos)) {
+                depth++;
+                pos += 3;
+            } else if (content.startsWith('{/if}', pos)) {
+                depth--;
+                pos += 5;
+            } else if (content.startsWith('{else if', pos) && depth === 0) {
+                return pos;
+            } else {
+                pos++;
+            }
+        }
+        
+        return -1;
+    }
+
+    findTopLevelElse(content, startPos) {
+        let depth = 0;
+        let pos = startPos;
+        
+        while (pos < content.length) {
+            if (content.startsWith('{if', pos)) {
+                depth++;
+                pos += 3;
+            } else if (content.startsWith('{/if}', pos)) {
+                depth--;
+                pos += 5;
+            } else if (content.startsWith('{else}', pos) && depth === 0) {
+                return pos;
+            } else {
+                pos++;
+            }
+        }
+        
+        return -1;
+    }
+
+    evaluateCondition(condition) {
+        try {
+            if (!condition || typeof condition !== 'string') {
+                return { result: false };
+            }
+
+            // Check for equality comparison operators
+            const comparisonMatch = condition.match(/^(\w+)\s*(={1,3})\s*(.+)$/);
+            if (comparisonMatch) {
+                const [, left, operator, right] = comparisonMatch;
+                const lookupKey = left.replace(/_/g, ' ');
+                const placeholder = this.values.get(lookupKey);
+                if (!placeholder) return { result: false };
+                
+                // For bool and options-based types, just compare against option string
+                if (['radio', 'select', 'bool', 'boolean'].includes(placeholder.type) && placeholder.options) {
+                    const rightValue = right.trim();
+                    const optionValue = placeholder.options[placeholder.value];
+                    return { 
+                        result: String(optionValue).toLowerCase() === rightValue.toLowerCase()
+                    };
+                }
+                
+                // For other types, direct comparison
+                return { 
+                    result: String(placeholder.value) === String(right.trim())
+                };
+            }
+
+            // Direct boolean evaluation (e.g., "if SomeBoolean")
+            const normalizedCondition = condition.trim().replace(/_/g, ' ');
+            const placeholder = this.values.get(normalizedCondition);
+            if (!placeholder) return { result: false };
+            return { result: Boolean(placeholder.value) };
+        } catch (error) {
+            console.error('Condition evaluation error:', error);
+            return { result: false };
+        }
+    }
+}
+
+/*
+====================================
+    Import / Export Modal
+====================================
+*/
+class ImportExportHTML {
+    static get modalStructure() {
+        return `
+            <!-- Import Modal -->
+            <div id="import-modal" class="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 hidden items-center justify-center z-50">
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[80vh] flex flex-col relative">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Import Prompts</h2>
+                        <button id="import-close" class="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <input type="file" id="import-file" accept=".json" 
+                            class="block w-full text-gray-500 dark:text-gray-400 
+                                   file:mr-4 file:py-2 file:px-4
+                                   file:rounded-full file:border-0 
+                                   file:text-sm file:font-semibold
+                                   file:bg-blue-50 dark:file:bg-blue-900/30 
+                                   file:text-blue-700 dark:file:text-blue-300
+                                   hover:file:bg-blue-100 dark:hover:file:bg-blue-900/50
+                                   cursor-pointer"/>
+                    </div>
+                    
+                    <div id="import-tree" 
+                         class="flex-1 overflow-y-auto mb-4 border dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
+                        <p class="text-gray-500 dark:text-gray-400 text-center">Select a JSON file to import</p>
+                    </div>
+                    
+                    <div class="flex justify-end gap-2">
+                        <button id="import-cancel" 
+                                class="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200
+                                       font-medium transition-colors">
+                            Cancel
+                        </button>
+                        <button id="import-confirm" 
+                                class="px-4 py-2 bg-primary text-white rounded-lg 
+                                       hover:bg-primary/80 disabled:opacity-50 
+                                       disabled:cursor-not-allowed font-medium
+                                       transition-colors"
+                                disabled>
+                            Import Selected
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Export Modal -->
+            <div id="export-modal" class="fixed inset-0 bg-black bg-opacity-50 dark:bg-opacity-70 hidden items-center justify-center z-50">
+                <div class="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[80vh] flex flex-col relative">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-bold text-gray-900 dark:text-gray-100">Export Prompts</h2>
+                        <button id="export-close" class="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <input type="text" id="export-filename" 
+                               placeholder="prompt_database" 
+                               class="w-full px-3 py-2 border dark:border-gray-700 rounded-lg 
+                                      bg-white dark:bg-gray-700 
+                                      text-gray-900 dark:text-gray-100
+                                      placeholder-gray-400 dark:placeholder-gray-500
+                                      focus:outline-none focus:ring-2 focus:ring-primary 
+                                      focus:border-primary transition-colors"/>
+                    </div>
+                    
+                    <div id="export-tree" 
+                         class="flex-1 overflow-y-auto mb-4 border dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-800">
+                        <p class="text-gray-500 dark:text-gray-400 text-center">Loading...</p>
+                    </div>
+                    
+                    <div class="flex justify-end gap-2">
+                        <button id="export-cancel" 
+                                class="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 
+                                       font-medium transition-colors">
+                            Cancel
+                        </button>
+                        <button id="export-confirm" 
+                                class="px-4 py-2 bg-primary text-white rounded-lg 
+                                       hover:bg-primary/80 font-medium transition-colors">
+                            Export Selected
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    static renderFolderItem(folder, folderId, depth, contentHtml, isImport) {
+        const indentClass = `ml-${depth * 4}`;
+        return `
+            <div class="folder-container ${indentClass} mb-2" data-folder-id="${folderId}">
+                <div class="flex items-center py-1 px-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg 
+                            transition-colors duration-150 cursor-pointer group">
+                    <button class="collapse-btn mr-2 w-6 h-6 flex items-center justify-center 
+                                   text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 focus:outline-none 
+                                   transition-colors duration-150">
+                        <i class="fas fa-chevron-right transform transition-transform duration-150"></i>
+                    </button>
+                    <input type="checkbox" 
+                           class="folder-checkbox mr-2 h-4 w-4 rounded border-gray-300 dark:border-gray-600 
+                                  text-primary focus:ring-primary dark:focus:ring-primary focus:ring-offset-0 
+                                  transition-colors duration-150
+                                  checked:bg-primary dark:checked:bg-primary checked:hover:bg-primary/90 
+                                  indeterminate:bg-primary/70" 
+                           data-id="${folderId}" 
+                           data-type="folder" 
+                           checked>
+                    <span class="font-medium text-gray-700 dark:text-gray-300 group-hover:text-gray-900 dark:group-hover:text-gray-100 
+                                transition-colors duration-150">
+                        ${folder.name}
+                    </span>
+                </div>
+                <div class="folder-content space-y-1 ml-8" style="display: none;">
+                    ${contentHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    static renderPromptItem(prompt, promptId, depth, hasConflict, isImport) {
+        const indentClass = `ml-${depth * 4}`;
+        return `
+            <div class="prompt-item py-1 px-2 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg 
+                        transition-colors duration-150">
+                <div class="flex items-center">
+                    <input type="checkbox" 
+                           class="prompt-checkbox mr-2 h-4 w-4 rounded border-gray-300 dark:border-gray-600 
+                                  text-primary focus:ring-primary dark:focus:ring-primary focus:ring-offset-0 
+                                  transition-colors duration-150
+                                  checked:bg-primary dark:checked:bg-primary checked:hover:bg-primary/90"
+                           data-id="${promptId}" 
+                           data-type="prompt" 
+                           ${isImport ? (hasConflict ? '' : 'checked') : 'checked'}>
+                    <span class="text-gray-600 dark:text-gray-400 ${hasConflict ? 'text-red-500 dark:text-red-400' : ''} 
+                                group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors duration-150">
+                        ${prompt.name}
+                    </span>
+                    ${hasConflict ? `
+                        <span class="ml-2 text-xs px-2 py-0.5 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 
+                                   rounded-full">
+                            Duplicate
+                        </span>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    static emptyTreeMessage(type) {
+        return `
+            <p class="text-gray-500 dark:text-gray-400 p-4 text-center">
+                ${type === 'import' ? 
+                  'Select a JSON file to import' : 
+                  'No items to export'}
+            </p>
+        `;
+    }
+
+    static loadingMessage() {
+        return `
+            <div class="flex justify-center items-center p-4">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+            </div>
+        `;
+    }
+}
+
+class ImportExportComponent extends BaseComponent {
+    constructor() {
+        super();
+        this.importData = null;
+        this.treeCache = new Map();
+        this.activeTreeIds = new Set();
+    }
+
+    initialize() {
+        // Add modals to DOM first
+        const modalContainer = document.createElement('div');
+        modalContainer.innerHTML = ImportExportHTML.modalStructure;
+        document.body.appendChild(modalContainer);
+
+        // Now setup event listeners after DOM elements exist
+        this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+        this.eventHandler.unbindContext('modal');
+        
+        // Get all elements first and verify they exist
+        const elements = {
+            importFile: document.getElementById('import-file'),
+            importClose: document.getElementById('import-close'),
+            importCancel: document.getElementById('import-cancel'),
+            importConfirm: document.getElementById('import-confirm'),
+            exportClose: document.getElementById('export-close'),
+            exportCancel: document.getElementById('export-cancel'),
+            exportConfirm: document.getElementById('export-confirm')
+        };
+
+        // Only bind if element exists
+        if (elements.importFile) {
+            this.eventHandler.bind(elements.importFile, 'change', 
+                (e) => this.handleFileSelect(e), 'modal');
+        }
+        if (elements.importClose) {
+            this.eventHandler.bind(elements.importClose, 'click', 
+                () => this.hideImportModal(), 'modal');
+        }
+        if (elements.importCancel) {
+            this.eventHandler.bind(elements.importCancel, 'click', 
+                () => this.hideImportModal(), 'modal');
+        }
+        if (elements.importConfirm) {
+            this.eventHandler.bind(elements.importConfirm, 'click', 
+                () => this.handleImport(), 'modal');
+        }
+        if (elements.exportClose) {
+            this.eventHandler.bind(elements.exportClose, 'click', 
+                () => this.hideExportModal(), 'modal');
+        }
+        if (elements.exportCancel) {
+            this.eventHandler.bind(elements.exportCancel, 'click', 
+                () => this.hideExportModal(), 'modal');
+        }
+        if (elements.exportConfirm) {
+            this.eventHandler.bind(elements.exportConfirm, 'click', 
+                () => this.handleExport(), 'modal');
+        }
+    }
+
+    showImportModal() {
+        const modal = document.getElementById('import-modal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        document.getElementById('import-confirm').disabled = true;
+        // Setup tree event listeners when showing modal
+        this.setupTreeEventListeners('import-tree');
+    }
+
+    hideImportModal() {
+        const modal = document.getElementById('import-modal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        this.resetImport();
+        // Only unbind tree events, keep modal events
+        this.eventHandler.unbindContext('tree');
+        this.activeTreeIds.clear();
+        this.treeCache.clear();
+    }
+
+    showExportModal() {
+        const modal = document.getElementById('export-modal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        // Render the export tree when showing modal
+        this.renderExportTree();
+        // Setup tree event listeners
+        this.setupTreeEventListeners('export-tree');
+    }
+
+    hideExportModal() {
+        const modal = document.getElementById('export-modal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        // Only unbind tree events, keep modal events
+        this.eventHandler.unbindContext('tree');
+        this.activeTreeIds.clear();
+        this.treeCache.clear();
+    }
+
+    resetImport() {
+        this.importData = null;
+        const importFile = document.getElementById('import-file');
+        const importTree = document.getElementById('import-tree');
+        if (importFile) importFile.value = '';
+        if (importTree) importTree.innerHTML = ImportExportHTML.emptyTreeMessage('import');
+        document.getElementById('import-confirm').disabled = true;
+    }
+
+    handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        if (!file.name.endsWith('.json')) {
+            NotificationSystem.show('Please select a JSON file', 'error');
+            this.resetImport();
+            return;
+        }
+
+        file.text().then(content => {
+            const importedData = JSON.parse(content);
+            const validationResult = this.validateImportData(importedData);
+            
+            if (validationResult.isValid) {
+                this.importData = importedData;
+                this.renderImportTree(importedData);
+                document.getElementById('import-confirm').disabled = false;
+            } else {
+                NotificationSystem.show(`Import validation failed: ${validationResult.errors[0]}`, 'error');
+                this.resetImport();
+            }
+        }).catch(error => {
+            console.error('Import processing error:', error);
+            NotificationSystem.show('Failed to process import file', 'error');
+            this.resetImport();
+        });
+    }
+
+    handleImport() {
+        if (!this.importData) {
+            NotificationSystem.show('No valid import data available', 'error');
+            return;
+        }
+
+        const selectedItems = this.getSelectedItems('import-tree');
+        delete selectedItems.folders.root;
+        
+        if (Object.keys(selectedItems.prompts).length === 0 && Object.keys(selectedItems.folders).length === 0) {
+            NotificationSystem.show('Please select at least one item to import', 'warning');
+            return;
+        }
+
+        try {
+            window.promptApp.data.folders = {
+                ...window.promptApp.data.folders,
+                ...selectedItems.folders
+            };
+            
+            window.promptApp.data.prompts = {
+                ...window.promptApp.data.prompts,
+                ...selectedItems.prompts
+            };
+
+            window.promptApp.dataManager.saveToStorage();
+            window.promptApp.sidebar.render();
+            window.promptApp.welcome.render();
+
+            NotificationSystem.show(
+                `Successfully imported ${Object.keys(selectedItems.folders).length} folders and ${Object.keys(selectedItems.prompts).length} prompts`, 
+                'success'
+            );
+            this.hideImportModal();
+        } catch (error) {
+            console.error('Import error:', error);
+            NotificationSystem.show('Failed to import selected items', 'error');
+        }
+    }
+
+    handleExport() {
+        const selectedItems = this.getSelectedItems('export-tree');
+        
+        if (Object.keys(selectedItems.prompts).length === 0 && Object.keys(selectedItems.folders).length === 0) {
+            NotificationSystem.show('Please select at least one item to export', 'warning');
+            return;
+        }
+
+        try {
+            const filename = document.getElementById('export-filename').value || 'prompt_database';
+            const exportData = JSON.stringify(selectedItems, null, 2);
+            const blob = new Blob([exportData], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${filename}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            this.hideExportModal();
+            NotificationSystem.show('Export completed successfully!', 'success');
+        } catch (error) {
+            console.error('Export error:', error);
+            NotificationSystem.show('Failed to export items', 'error');
+        }
+    }
+
+    buildTreeStructure(data, isImport = true) {
+        const cacheKey = `${isImport}_${JSON.stringify(data)}`;
+        if (this.treeCache.has(cacheKey)) {
+            return this.treeCache.get(cacheKey);
+        }
+
+        const existingData = window.promptApp.data;
+        let htmlParts = [];
+
+        const renderTree = (folderId, depth = 0) => {
+            if (folderId === 'root') return '';
+            
+            const folder = data.folders[folderId];
+            let contentParts = [];
+
+            Object.entries(data.folders)
+                .filter(([_, f]) => f.parentId === folderId)
+                .sort((a, b) => a[1].name.localeCompare(b[1].name))
+                .forEach(([id, _]) => {
+                    contentParts.push(renderTree(id, depth + 1));
+                });
+
+            Object.entries(data.prompts)
+                .filter(([_, p]) => p.parentId === folderId)
+                .sort((a, b) => a[1].name.localeCompare(b[1].name))
+                .forEach(([id, prompt]) => {
+                    if (isImport) {
+                        const conflict = existingData.prompts[id] !== undefined;
+                        contentParts.push(ImportExportHTML.renderPromptItem(prompt, id, depth + 1, conflict, isImport));
+                    } else {
+                        contentParts.push(ImportExportHTML.renderPromptItem(prompt, id, depth + 1, false, isImport));
+                    }
+                });
+
+            return ImportExportHTML.renderFolderItem(folder, folderId, depth, contentParts.join(''), isImport);
+        };
+
+        Object.entries(data.folders)
+            .filter(([id, folder]) => id !== 'root' && (folder.parentId === 'root' || folder.parentId === null))
+            .sort((a, b) => a[1].name.localeCompare(b[1].name))
+            .forEach(([id, _]) => {
+                htmlParts.push(renderTree(id));
+            });
+
+        Object.entries(data.prompts)
+            .filter(([_, p]) => p.parentId === 'root')
+            .sort((a, b) => a[1].name.localeCompare(b[1].name))
+            .forEach(([id, prompt]) => {
+                if (isImport) {
+                    const conflict = existingData.prompts[id] !== undefined;
+                    htmlParts.push(ImportExportHTML.renderPromptItem(prompt, id, 0, conflict, isImport));
+                } else {
+                    htmlParts.push(ImportExportHTML.renderPromptItem(prompt, id, 0, false, isImport));
+                }
+            });
+
+        const html = htmlParts.join('') || ImportExportHTML.emptyTreeMessage(isImport ? 'import' : 'export');
+        this.treeCache.set(cacheKey, html);
+        return html;
+    }
+
+    setupTreeEventListeners(treeId) {
+        const tree = document.getElementById(treeId);
+        if (tree && !this.activeTreeIds.has(treeId)) {
+            this.eventHandler.bind(tree, 'click', (e) => this.handleTreeClick(e), 'tree');
+            this.eventHandler.bind(tree, 'change', 
+                (e) => this.handleTreeChange(e, treeId.includes('import')), 'tree');
+            this.activeTreeIds.add(treeId);
+        }
+    }
+
+    renderImportTree(importedData) {
+        const importTree = document.getElementById('import-tree');
+        importTree.innerHTML = this.buildTreeStructure(importedData, true);
+        // Setup tree event listeners after rendering
+        this.setupTreeEventListeners('import-tree');
+    }
+
+    renderExportTree() {
+        const exportTree = document.getElementById('export-tree');
+        if (exportTree) {
+            exportTree.innerHTML = this.buildTreeStructure(window.promptApp.data, false);
+            // Setup tree event listeners after rendering
+            this.setupTreeEventListeners('export-tree');
+        }
+    }
+    handleTreeClick(e) {
+        const collapseBtn = e.target.closest('.collapse-btn');
+        if (collapseBtn) {
+            const container = collapseBtn.closest('.folder-container');
+            const content = container.querySelector('.folder-content');
+            const icon = collapseBtn.querySelector('i');
+            
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                icon.classList.add('rotate-90');
+            } else {
+                content.style.display = 'none';
+                icon.classList.remove('rotate-90');
+            }
+            
+            e.stopPropagation();
+        }
+    }
+
+    handleTreeChange(e, isImport) {
+        const checkbox = e.target;
+        
+        if (checkbox.matches('.folder-checkbox')) {
+            const container = checkbox.closest('.folder-container');
+            const childCheckboxes = container.querySelectorAll('input[type="checkbox"]');
+            
+            childCheckboxes.forEach(child => {
+                if (child !== checkbox) {
+                    child.checked = checkbox.checked;
+                }
+            });
+
+            this.updateParentFolderStates(container);
+        }
+
+        if (checkbox.matches('.prompt-checkbox')) {
+            const folderContainer = checkbox.closest('.folder-container');
+            if (folderContainer) {
+                this.updateFolderState(folderContainer);
+                this.updateParentFolderStates(folderContainer);
+            }
+        }
+
+        if (isImport) {
+            const importTree = document.getElementById('import-tree');
+            const hasCheckedItems = importTree.querySelector('input[type="checkbox"]:checked');
+            const importButton = document.getElementById('import-confirm');
+            if (importButton) {
+                importButton.disabled = !hasCheckedItems;
+            }
+        }
+    }
+
+    updateFolderState(folderContainer) {
+        const folderCheckbox = folderContainer.querySelector('.folder-checkbox');
+        const contentCheckboxes = folderContainer.querySelectorAll('.prompt-checkbox');
+        
+        if (folderCheckbox && contentCheckboxes.length > 0) {
+            const checkedCount = Array.from(contentCheckboxes).filter(cb => cb.checked).length;
+            
+            if (checkedCount === 0) {
+                folderCheckbox.checked = false;
+                folderCheckbox.indeterminate = false;
+            } else if (checkedCount === contentCheckboxes.length) {
+                folderCheckbox.checked = true;
+                folderCheckbox.indeterminate = false;
+            } else {
+                folderCheckbox.checked = true;
+                folderCheckbox.indeterminate = true;
+            }
+        }
+    }
+
+    updateParentFolderStates(startContainer) {
+        let currentContainer = startContainer.parentElement.closest('.folder-container');
+        while (currentContainer) {
+            this.updateFolderState(currentContainer);
+            currentContainer = currentContainer.parentElement.closest('.folder-container');
+        }
+    }
+
+    getSelectedItems(treeId) {
+        const tree = document.getElementById(treeId);
+        const selectedItems = {
+            folders: {},
+            prompts: {}
+        };
+
+        const checkboxes = tree.querySelectorAll('input[type="checkbox"]:checked');
+        checkboxes.forEach(checkbox => {
+            const id = checkbox.dataset.id;
+            const type = checkbox.dataset.type;
+            
+            if (!id || !type) return;
+
+            if (type === 'folder' && 
+                (this.importData?.folders[id] || window.promptApp.data.folders[id])) {
+                selectedItems.folders[id] = this.importData ? 
+                    this.importData.folders[id] : 
+                    window.promptApp.data.folders[id];
+            } else if (type === 'prompt' && 
+                (this.importData?.prompts[id] || window.promptApp.data.prompts[id])) {
+                selectedItems.prompts[id] = this.importData ? 
+                    this.importData.prompts[id] : 
+                    window.promptApp.data.prompts[id];
+            }
+        });
+
+        return selectedItems;
+    }
+
+    validateImportData(data) {
+        const errors = [];
+        
+        // Basic structure validation
+        if (!data || typeof data !== 'object') {
+            return { isValid: false, errors: ['Invalid file format'] };
+        }
+
+        if (!data.folders || !data.prompts) {
+            return { isValid: false, errors: ['Missing folders or prompts section'] };
+        }
+
+        // Validate folders
+        for (const [id, folder] of Object.entries(data.folders)) {
+            if (!folder.name || typeof folder.name !== 'string') {
+                errors.push(`Invalid folder name for ID: ${id}`);
+            }
+            if (folder.parentId !== null && typeof folder.parentId !== 'string') {
+                errors.push(`Invalid parent ID for folder: ${folder.name}`);
+            }
+        }
+
+        // Validate prompts
+        for (const [id, prompt] of Object.entries(data.prompts)) {
+            if (!prompt.name || typeof prompt.name !== 'string') {
+                errors.push(`Invalid prompt name for ID: ${id}`);
+            }
+            if (!prompt.content || typeof prompt.content !== 'string') {
+                errors.push(`Missing content for prompt: ${prompt.name}`);
+            }
+            if (!prompt.parentId || typeof prompt.parentId !== 'string') {
+                errors.push(`Invalid parent ID for prompt: ${prompt.name}`);
+            }
+        }
+
+        // Validate folder hierarchy
+        const folderIds = new Set(Object.keys(data.folders));
+        folderIds.add('root');
+        
+        for (const folder of Object.values(data.folders)) {
+            if (folder.parentId && !folderIds.has(folder.parentId)) {
+                errors.push(`Folder "${folder.name}" references non-existent parent`);
+            }
+        }
+
+        // Validate prompt parents
+        for (const prompt of Object.values(data.prompts)) {
+            if (!folderIds.has(prompt.parentId)) {
+                errors.push(`Prompt "${prompt.name}" references non-existent parent folder`);
+            }
+        }
+
+        return {
+            isValid: errors.length === 0,
+            errors
+        };
+    }
+
+    destroy() {
+        this.eventHandler.unbindAll();
+        this.activeTreeIds.clear();
+        this.treeCache.clear();
+        this.importData = null;
+    }
+}
+/*
+====================================
+    Data Management
+====================================
+*/
+class DataManager {
+    constructor() {
+        this.data = {
+            folders: {
+                root: { name: 'Root', parentId: null }
+            },
+            prompts: {},
+            favorites: [],
+            recentlyEdited: []
+        };
+        this.loadFromStorage();
+    }
+
+    // Storage Methods
+    loadFromStorage() {
+        try {
+            const savedData = localStorage.getItem('promptManagerData');
+            if (savedData) {
+                const { folders, prompts, favorites, recentlyEdited } = JSON.parse(savedData);
+                this.data = {
+                    folders: {
+                        root: { name: 'Root', parentId: null },
+                        ...(folders || {})
+                    },
+                    prompts: prompts || {},
+                    favorites: favorites || [],
+                    recentlyEdited: recentlyEdited || []
+                };
+            }
+        } catch (error) {
+            console.error('Error loading from storage:', error);
+            NotificationSystem.show('Error loading saved data', 'error');
+        }
+    }
+
+    saveToStorage() {
+        try {
+            localStorage.setItem('promptManagerData', JSON.stringify(this.data));
+        } catch (error) {
+            console.error('Error saving to storage:', error);
+            NotificationSystem.show('Error saving data', 'error');
+        }
+    }
+
+    // ID Generation
+    generateId() {
+        return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    }
+
+    // Folder Operations
+    addFolder(folder) {
+        const id = this.generateId();
+        this.data.folders[id] = folder;
+        this.saveToStorage();
+        return id;
+    }
+
+    updateFolder(folderId, updatedFolder) {
+        try {
+            if (!this.data.folders[folderId]) {
+                throw new Error('Folder not found');
+            }
+
+            if (this.wouldCreateCircular(folderId, updatedFolder.parentId)) {
+                throw new Error('Cannot move folder into its own subfolder');
+            }
+
+            this.data.folders[folderId] = {
+                ...this.data.folders[folderId],
+                ...updatedFolder
+            };
+
+            this.saveToStorage();
+            return true;
+        } catch (error) {
+            console.error('Error updating folder:', error);
+            throw error;
+        }
+    }
+
+    deleteFolder(folderId) {
+        try {
+            if (!this.data.folders[folderId]) {
+                throw new Error('Folder not found');
+            }
+
+            delete this.data.folders[folderId];
+            this.saveToStorage();
+            return true;
+        } catch (error) {
+            console.error('Error deleting folder:', error);
+            return false;
+        }
+    }
+
+    // Prompt Operations
+    addPrompt(prompt) {
+        const id = this.generateId();
+        this.data.prompts[id] = prompt;
+        this.addToRecent(id);
+        this.saveToStorage();
+        return id;
+    }
+
+    updatePrompt(promptId, updatedPrompt) {
+        try {
+            if (!this.data.prompts[promptId]) {
+                throw new Error('Prompt not found');
+            }
+
+            if (updatedPrompt.parentId && !this.data.folders[updatedPrompt.parentId]) {
+                throw new Error('Target folder not found');
+            }
+
+            this.data.prompts[promptId] = {
+                ...this.data.prompts[promptId],
+                ...updatedPrompt
+            };
+
+            this.addToRecent(promptId);
+            this.saveToStorage();
+            return true;
+        } catch (error) {
+            console.error('Error updating prompt:', error);
+            throw error;
+        }
+    }
+
+    deletePrompt(promptId) {
+        if (!this.data.prompts[promptId]) return false;
+
+        delete this.data.prompts[promptId];
+        this.data.favorites = this.data.favorites.filter(id => id !== promptId);
+        this.data.recentlyEdited = this.data.recentlyEdited.filter(id => id !== promptId);
+        
+        this.saveToStorage();
+        return true;
+    }
+
+    // Favorites Management
+    toggleFavorite(promptId) {
+        if (!this.data.prompts[promptId]) return false;
+
+        const index = this.data.favorites.indexOf(promptId);
+        if (index === -1) {
+            this.data.favorites.push(promptId);
+        } else {
+            this.data.favorites.splice(index, 1);
+        }
+        
+        this.saveToStorage();
+        return true;
+    }
+
+    isFavorite(promptId) {
+        return this.data.favorites.includes(promptId);
+    }
+
+    getFavorites() {
+        return this.data.favorites
+            .map(id => ({
+                id,
+                ...this.data.prompts[id]
+            }))
+            .filter(prompt => prompt.name);
+    }
+
+    // Recently Edited Management
+    addToRecent(promptId) {
+        if (!this.data.prompts[promptId]) return false;
+        
+        this.data.recentlyEdited = [
+            promptId,
+            ...this.data.recentlyEdited.filter(id => id !== promptId)
+        ].slice(0, 10);
+        
+        this.saveToStorage();
+        return true;
+    }
+
+    getRecentlyEdited() {
+        return this.data.recentlyEdited
+            .map(id => ({
+                id,
+                ...this.data.prompts[id]
+            }))
+            .filter(prompt => prompt.name);
+    }
+
+    // Bulk Operations
+    moveItemsToFolder(items, targetFolderId) {
+        try {
+            if (!this.data.folders[targetFolderId] && targetFolderId !== 'root') {
+                throw new Error('Target folder not found');
+            }
+
+            let successCount = 0;
+            const totalItems = items.length;
+
+            for (const item of items) {
+                if (this.moveToFolder(item.id, item.type, targetFolderId)) {
+                    successCount++;
+                }
+            }
+
+            return {
+                success: successCount > 0,
+                successCount,
+                totalItems
+            };
+        } catch (error) {
+            console.error('Error moving items:', error);
+            throw error;
+        }
+    }
+
+    moveToFolder(itemId, itemType, targetFolderId) {
+        try {
+            if (itemType === 'folder') {
+                if (this.wouldCreateCircular(itemId, targetFolderId)) {
+                    throw new Error('Cannot move folder into its own subfolder');
+                }
+                return this.updateFolder(itemId, {
+                    ...this.data.folders[itemId],
+                    parentId: targetFolderId
+                });
+            } else if (itemType === 'prompt') {
+                return this.updatePrompt(itemId, {
+                    ...this.data.prompts[itemId],
+                    parentId: targetFolderId
+                });
+            }
+            throw new Error('Invalid item type');
+        } catch (error) {
+            console.error('Move error:', error);
+            return false;
+        }
+    }
+
+    deleteItems(items) {
+        try {
+            let successCount = 0;
+            const totalItems = items.length;
+
+            for (const item of items) {
+                if (item.type === 'folder') {
+                    if (this.deleteFolderWithContents(item.id)) {
+                        successCount++;
+                    }
+                } else if (item.type === 'prompt') {
+                    if (this.deletePrompt(item.id)) {
+                        successCount++;
+                    }
+                }
+            }
+
+            return {
+                success: successCount > 0,
+                successCount,
+                totalItems
+            };
+        } catch (error) {
+            console.error('Error deleting items:', error);
+            throw error;
+        }
+    }
+
+    // Helper Methods
+    wouldCreateCircular(sourceId, targetId) {
+        let currentId = targetId;
+        const visited = new Set();
+        
+        while (currentId && currentId !== 'root') {
+            if (currentId === sourceId) return true;
+            if (visited.has(currentId)) return true;
+            
+            visited.add(currentId);
+            currentId = this.data.folders[currentId]?.parentId;
+        }
+        
+        return false;
+    }
+
+    getDescendantItems(folderId) {
+        const result = {
+            folders: new Set(),
+            prompts: new Set()
+        };
+
+        const processFolder = (currentFolderId) => {
+            // Add all prompts in this folder
+            Object.entries(this.data.prompts)
+                .filter(([_, prompt]) => prompt.parentId === currentFolderId)
+                .forEach(([promptId, _]) => result.prompts.add(promptId));
+
+            // Process all subfolders
+            Object.entries(this.data.folders)
+                .filter(([_, folder]) => folder.parentId === currentFolderId)
+                .forEach(([subFolderId, _]) => {
+                    result.folders.add(subFolderId);
+                    processFolder(subFolderId);
+                });
+        };
+
+        processFolder(folderId);
+        return {
+            folders: Array.from(result.folders),
+            prompts: Array.from(result.prompts)
+        };
+    }
+
+    deleteFolderWithContents(folderId) {
+        if (!this.data.folders[folderId]) {
+            throw new Error('Folder not found');
+        }
+
+        // Get all descendant folders and prompts
+        const itemsToDelete = this.getDescendantItems(folderId);
+
+        try {
+            // Delete all prompts in descendant folders
+            itemsToDelete.prompts.forEach(promptId => {
+                this.deletePrompt(promptId, false); // false = don't save after each deletion
+            });
+
+            // Delete all descendant folders
+            itemsToDelete.folders.forEach(subFolderId => {
+                delete this.data.folders[subFolderId];
+            });
+
+            // Delete the folder itself
+            delete this.data.folders[folderId];
+
+            // Save changes once at the end
+            this.saveToStorage();
+            return true;
+        } catch (error) {
+            console.error('Error in cascade delete:', error);
+            throw new Error('Failed to delete all contents');
+        }
+    }
+
+    getFolderList() {
+        const folders = [];
+        
+        const addFolder = (folderId, depth = 0) => {
+            const folder = this.data.folders[folderId];
+            if (folder) {
+                folders.push({
+                    id: folderId,
+                    name: '  '.repeat(depth) + folder.name
+                });
+
+                // Add subfolders
+                Object.entries(this.data.folders)
+                    .filter(([_, f]) => f.parentId === folderId)
+                    .sort((a, b) => a[1].name.localeCompare(b[1].name))
+                    .forEach(([id, _]) => addFolder(id, depth + 1));
+            }
+        };
+
+        addFolder('root');
+        return folders;
+    }
+}
+
+class StyleManager {
+    constructor() {
+        this.initialized = false;
+    }
+
+    async initialize() {
+        if (this.initialized) return;
+        
+        try {
+            await this.initializeStyles();
+            await this.initializeMarked();
+            this.initialized = true;
+        } catch (error) {
+            console.error('Failed to initialize styles:', error);
+            throw error;
+        }
+    }
+
+    async initializeStyles() {
+        await this.injectStyles('markdown-styles', this.getMarkdownStyles());
+    }
+
+    initializeMarked() {
+        const renderer = new marked.Renderer();
+        
+        renderer.code = function(code, languageInput) {
+            const language = languageInput || 'plaintext';
+            return `<pre><code class="language-${language}">${code}</code></pre>`;
+        };
+
+        marked.setOptions({
+            renderer: renderer,
+            gfm: true,
+            breaks: true,
+            sanitize: false,
+            smartLists: true,
+            smartypants: true
+        });
+    }
+
+    async injectStyles(id, styles) {
+        let styleElement = document.getElementById(id);
+        if (!styleElement) {
+            styleElement = document.createElement('style');
+            styleElement.id = id;
+            document.head.appendChild(styleElement);
+        }
+        styleElement.textContent = styles;
+    }
+
+    getMarkdownStyles() {
+        const styles = {
+            base: '.markdown-content{color:#374151;line-height:1.625}.dark .markdown-content{color:#E5E7EB}',
+            headings: '.markdown-content h1,.markdown-content h2,.markdown-content h3,.markdown-content h4{font-weight:600;line-height:1.25;margin-top:1.5em;margin-bottom:.75em}.markdown-content h1{font-size:2em}.markdown-content h2{font-size:1.5em}.markdown-content h3{font-size:1.25em}.markdown-content h4{font-size:1em}.dark .markdown-content h1,.dark .markdown-content h2,.dark .markdown-content h3,.dark .markdown-content h4{color:#E5E7EB}',
+            text: '.markdown-content p{margin-top:1.25em;margin-bottom:1.25em}.markdown-content blockquote{border-left:4px solid #E5E7EB;margin:1.25em 0;padding-left:1em;font-style:italic;color:#6B7280}.dark .markdown-content blockquote{border-left-color:#4B5563;color:#9CA3AF}',
+            lists: '.markdown-content ul,.markdown-content ol{margin-top:1em;margin-bottom:1em;padding-left:1.625em;list-style-type:disc}.markdown-content ol{list-style-type:decimal}.markdown-content li{margin-top:.5em;margin-bottom:.5em}',
+            code: '.markdown-content pre{background-color:#f3f4f6;border:1px solid #e5e7eb;margin:1rem 0;padding:1rem;border-radius:0.375rem}.dark .markdown-content pre{background-color:#111827;border-color:#030712}.markdown-content code{font-family:monospace;font-size:0.875em;background:transparent}.markdown-content :not(pre)>code{padding:0.2em 0.4em;border-radius:0.25rem}',
+            tables: '.markdown-content table{width:100%;border-collapse:collapse;margin:1.25em 0}.markdown-content th,.markdown-content td{border:1px solid #E5E7EB;padding:.5em .75em;text-align:left}.dark .markdown-content th,.dark .markdown-content td{border-color:#4B5563}.markdown-content th{background-color:#F9FAFB;font-weight:600}.dark .markdown-content th{background-color:#374151}',
+            placeholders: '.markdown-content .placeholder-value{display:inline-block;padding:.125em .375em;border-radius:.25em;background-color:#E5E7EB;font-family:monospace}.dark .markdown-content .placeholder-value{background-color:#4B5563}'
+        };
+        
+        return Object.values(styles).join('\n');
+    }
+}
+
+/*
+====================================
+    Main Application
+====================================
+*/
+class PromptApplication {
+    constructor() {
+        // Initialize core systems
+        NotificationSystem.initialize();
+        this.styleManager = new StyleManager();
+        
+        // Initialize managers
+        this.dataManager = new DataManager();
+        
+        // Initialize UI Components
+        this.sidebar = new SidebarComponent();
+        this.welcome = new WelcomeComponent();
+        this.promptView = new PromptViewManager();
+        this.importExport = new ImportExportComponent();
+
+        // Make data accessible to components
+        this.data = this.dataManager.data;
+        console.log("Data loaded: ", this.data);
+    }
+
+    async initialize() {
+        try {
+            // Make app instance globally available
+            window.promptApp = this;
+            
+            // Initialize styles first
+            await this.styleManager.initialize();
+            
+            // Initialize components
+            await Promise.all([
+                this.sidebar.initialize(),
+                this.welcome.initialize(),
+                this.importExport.initialize(),
+                this.promptView.initialize()
+            ]);
+        } catch (error) {
+            console.error('Error during initialization:', error);
+            NotificationSystem.show('Error initializing application', 'error');
+        }
+    }
+
+    // Static accessor for StyleManager
+    static getStyleManager() {
+        return window.promptApp?.styleManager;
+    }
+
+    // Folder Operations
+    addFolder(folder) {
+        try {
+            const id = this.dataManager.addFolder(folder);
+            NotificationSystem.show('Folder created successfully', 'success');
+            return id;
+        } catch (error) {
+            NotificationSystem.show('Error creating folder', 'error');
+            return null;
+        }
+    }
+
+    updateFolder(folderId, folder) {
+        try {
+            const success = this.dataManager.updateFolder(folderId, folder);
+            if (success) {
+                NotificationSystem.show('Folder updated successfully', 'success');
+            }
+            return success;
+        } catch (error) {
+            NotificationSystem.show(error.message || 'Error updating folder', 'error');
+            return false;
+        }
+    }
+
+    deleteFolder(folderId) {
+        try {
+            const success = this.dataManager.deleteFolderWithContents(folderId);
+            if (success) {
+                NotificationSystem.show('Folder deleted successfully', 'success');
+            }
+            return success;
+        } catch (error) {
+            NotificationSystem.show(error.message || 'Error deleting folder', 'error');
+            return false;
+        }
+    }
+
+    // Prompt Operations - slim pipeline methods
+    loadPrompt(promptId) {
+        return this.promptView.loadPrompt(promptId);
+    }
+
+    createNewPrompt(folderId) {
+        return this.promptView.createNewPrompt(folderId);
+    }
+
+    updatePrompt(promptId, promptData) {
+        const success = this.dataManager.updatePrompt(promptId, promptData);
+        if (success) {
+            this.refreshViews();
+        }
+        return success;
+    }
+
+    deletePrompt(promptId) {
+        const success = this.dataManager.deletePrompt(promptId);
+        if (success) {
+            this.refreshViews();
+        }
+        return success;
+    }
+
+    // Bulk Operations
+    moveItemsToFolder(items, targetFolderId) {
+        try {
+            const result = this.dataManager.moveItemsToFolder(items, targetFolderId);
+            
+            if (result.success) {
+                if (result.successCount === result.totalItems) {
+                    NotificationSystem.show('All items moved successfully', 'success');
+                } else {
+                    NotificationSystem.show(
+                        `Moved ${result.successCount} of ${result.totalItems} items`, 
+                        'warning'
+                    );
+                }
+            } else {
+                NotificationSystem.show('Failed to move items', 'error');
+            }
+
+            return result.success;
+        } catch (error) {
+            NotificationSystem.show(error.message || 'Error moving items', 'error');
+            return false;
+        }
+    }
+
+    deleteItems(items) {
+        try {
+            const result = this.dataManager.deleteItems(items);
+            
+            if (result.success) {
+                if (result.successCount === result.totalItems) {
+                    NotificationSystem.show('All items deleted successfully', 'success');
+                } else {
+                    NotificationSystem.show(
+                        `Deleted ${result.successCount} of ${result.totalItems} items`, 
+                        'warning'
+                    );
+                }
+            } else {
+                NotificationSystem.show('Failed to delete items', 'error');
+            }
+
+            return result.success;
+        } catch (error) {
+            NotificationSystem.show(error.message || 'Error deleting items', 'error');
+            return false;
+        }
+    }
+
+    // Favorite Management
+    toggleFavorite(promptId) {
+        const success = this.dataManager.toggleFavorite(promptId);
+        if (success) {
+            this.refreshViews();
+        }
+        return success;
+    }
+
+    isFavorite(promptId) {
+        return this.dataManager.isFavorite(promptId);
+    }
+
+    // Utility Methods
+    refreshViews() {
+        this.sidebar.render();
+        this.welcome.render();
+        this.promptView.refresh();
+    }
+
+    // Data Access Methods
+    getFavorites() {
+        return this.dataManager.getFavorites();
+    }
+
+    getRecentlyEdited() {
+        return this.dataManager.getRecentlyEdited();
+    }
+
+    // Folder Utilities
+    getFolderList() {
+        return this.dataManager.getFolderList();
+    }
+
+    // Import/Export
+    handleImport() {
+        this.importExport.showImportModal();
+    }
+
+    handleExport() {
+        this.importExport.showExportModal();
+    }
+}
+
+/*
+====================================
+    Application Initialization
+====================================
+*/
+// Modified startup function to handle async initialization
+async function initializePromptApplication() {
+    const app = new PromptApplication();
+    try {
+        await app.initialize();
+    } catch (error) {
+        console.error('Application initialization failed:', error);
+        NotificationSystem.show('Failed to start application', 'error');
+    }
+}
+
+// Start when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializePromptApplication);
+} else {
+    initializePromptApplication();
+}
+</script>
+</body>
+</html>
