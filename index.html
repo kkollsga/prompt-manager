@@ -7,7 +7,6 @@
     
     <!-- iOS specific meta tags -->
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Prompt Manager">
     
     <!-- iOS icons -->
@@ -461,7 +460,7 @@ class SidebarComponent extends BaseComponent {
 
             // Setup sidebar
             sidebar.innerHTML = SidebarHTML.structure;
-            sidebar.classList.add('fixed', 'lg:static', '-left-64', 'lg:left-0', 'z-40', 'transition-all', 'duration-300');
+            sidebar.classList.add('fixed', 'lg:static', '-left-64', 'lg:left-0', 'z-40', 'transition-all', 'duration-200');
         }
     }
 
@@ -513,11 +512,13 @@ class SidebarComponent extends BaseComponent {
                     localStorage.setItem('darkMode', systemPrefersDark);
                     if (systemPrefersDark) {
                         document.documentElement.classList.add('dark');
+                        this.updateStatusBarColor(true);
                     }
                 } else {
                     // Use stored preference
                     if (storedDarkMode === 'true') {
                         document.documentElement.classList.add('dark');
+                        this.updateStatusBarColor(true);
                     }
                 }
             };
@@ -529,9 +530,9 @@ class SidebarComponent extends BaseComponent {
             this.eventHandler.bind(darkModeToggle, 'click', () => {
                 document.documentElement.classList.add('transition-all', 'duration-200');
                 requestAnimationFrame(() => {
-                    document.documentElement.classList.toggle('dark');
-                    localStorage.setItem('darkMode', 
-                        document.documentElement.classList.contains('dark'));
+                    const isDark = document.documentElement.classList.toggle('dark');
+                    localStorage.setItem('darkMode', isDark);
+                    this.updateStatusBarColor(isDark);
                     
                     setTimeout(() => {
                         document.documentElement.classList.remove('transition-all', 'duration-200');
@@ -545,13 +546,39 @@ class SidebarComponent extends BaseComponent {
                 if (localStorage.getItem('darkMode') === null) {
                     if (e.matches) {
                         document.documentElement.classList.add('dark');
+                        this.updateStatusBarColor(true);
                     } else {
                         document.documentElement.classList.remove('dark');
+                        this.updateStatusBarColor(false);
                     }
                     localStorage.setItem('darkMode', e.matches);
                 }
             });
         }
+    }
+
+    updateStatusBarColor(isDark) {
+        let metaThemeColor = document.querySelector('meta[name="theme-color"]');
+        let metaStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+        
+        // Create theme-color meta if it doesn't exist
+        if (!metaThemeColor) {
+            metaThemeColor = document.createElement('meta');
+            metaThemeColor.name = 'theme-color';
+            document.head.appendChild(metaThemeColor);
+        }
+
+        // Create status-bar meta if it doesn't exist
+        if (!metaStatusBar) {
+            metaStatusBar = document.createElement('meta');
+            metaStatusBar.name = 'apple-mobile-web-app-status-bar-style';
+            document.head.appendChild(metaStatusBar);
+        }
+
+        // Now safely set the content
+        const color = isDark ? '#111827' : '#FFFFFF'; // Using Tailwind's gray-900 for dark and white for light
+        metaThemeColor.content = color;
+        metaStatusBar.content = isDark ? 'black-translucent' : 'default';
     }
 
     toggleMobileMenu() {
