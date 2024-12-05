@@ -2,8 +2,24 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Prompt Manager</title>
+    
+    <!-- iOS specific meta tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Prompt Manager">
+    
+    <!-- iOS icons -->
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230072CE'/%3E%3Cpath d='M256 128v256M128 256h256' stroke='white' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" sizes="152x152" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230072CE'/%3E%3Cpath d='M256 128v256M128 256h256' stroke='white' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230072CE'/%3E%3Cpath d='M256 128v256M128 256h256' stroke='white' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" sizes="167x167" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230072CE'/%3E%3Cpath d='M256 128v256M128 256h256' stroke='white' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
+    
+    <!-- Web App Manifest -->
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiUHJvbXB0IE1hbmFnZXIiLCJzaG9ydF9uYW1lIjoiUHJvbXB0cyIsInN0YXJ0X3VybCI6Ii4vaW5kZXguaHRtbCIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDcyQ0UiLCJ0aGVtZV9jb2xvciI6IiMwMDcyQ0UifQ==">
+    
+    <!-- Existing head content -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
@@ -347,6 +363,20 @@ class SidebarHTML {
         `;
     }
 
+    static get burgerButton() {
+        return `
+            <div class="fixed top-0 left-4 z-50 lg:hidden transform transition-transform duration-300" id="burger-container">
+                <button id="sidebar-toggle" 
+                        class="px-2 py-4">
+                    <i class="fas fa-bars shadow-md text-gray-600 hover:text-black dark:text-gray-300 dark:hover:text-white transition-colors duration-200"></i>
+                </button>
+            </div>
+            <div id="sidebar-overlay" 
+                 class="fixed inset-0 bg-black bg-opacity-50 lg:hidden z-30 hidden">
+            </div>
+        `;
+    }
+
     static renderFolderItem(id, folder, isSelected) {
         return `
             <li class="relative flex items-center p-2 rounded-lg cursor-pointer transition-all border border-white dark:border-gray-800 
@@ -404,6 +434,7 @@ class SidebarComponent extends BaseComponent {
         this.currentFolderId = 'root';
         this.selectedItems = new Set();
         this.activePromptId = null;
+        this.isMobileMenuOpen = false;
     }
 
     setActivePrompt(promptId) {
@@ -411,10 +442,33 @@ class SidebarComponent extends BaseComponent {
         this.render();
     }
 
+    render() {
+        this.ensureStructure();
+        this.updateFolderName();
+        this.renderItems();
+    }
+
+    ensureStructure() {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar && !sidebar.querySelector('#current-folder')) {
+            // Add burger menu and overlay to body
+            if (!document.getElementById('sidebar-toggle')) {
+                const mobileElements = document.createElement('div');
+                mobileElements.innerHTML = SidebarHTML.burgerButton;
+                document.body.appendChild(mobileElements.firstElementChild); // burger
+                document.body.appendChild(mobileElements.firstElementChild); // overlay
+            }
+
+            // Setup sidebar
+            sidebar.innerHTML = SidebarHTML.structure;
+            sidebar.classList.add('fixed', 'lg:static', '-left-64', 'lg:left-0', 'z-40', 'transition-all', 'duration-300');
+        }
+    }
+
     setupEventListeners() {
         this.ensureStructure();
 
-        // Action button listeners
+        // Existing action button listeners
         const actionButtons = {
             'back-arrow': () => this.handleNavigateUp(),
             'new-folder-btn': () => this.handleNewFolder(),
@@ -422,7 +476,9 @@ class SidebarComponent extends BaseComponent {
             'import-btn': () => this.handleImport(),
             'export-btn': () => this.handleExport(),
             'delete-selected-btn': () => this.handleDeleteSelected(),
-            'move-selected-btn': () => this.handleMoveSelected()
+            'move-selected-btn': () => this.handleMoveSelected(),
+            // Add burger menu listener
+            'sidebar-toggle': () => this.toggleMobileMenu()
         };
 
         Object.entries(actionButtons).forEach(([id, handler]) => {
@@ -431,6 +487,12 @@ class SidebarComponent extends BaseComponent {
                 this.eventHandler.bind(button, 'click', handler.bind(this));
             }
         });
+
+        // Add overlay listener
+        const overlay = document.getElementById('sidebar-overlay');
+        if (overlay) {
+            this.eventHandler.bind(overlay, 'click', () => this.toggleMobileMenu());
+        }
 
         // Item list click handlers
         const itemList = document.getElementById('item-list');
@@ -489,6 +551,25 @@ class SidebarComponent extends BaseComponent {
                     localStorage.setItem('darkMode', e.matches);
                 }
             });
+        }
+    }
+
+    toggleMobileMenu() {
+        this.isMobileMenuOpen = !this.isMobileMenuOpen;
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        const burgerContainer = document.getElementById('burger-container');
+
+        if (this.isMobileMenuOpen) {
+            sidebar.classList.remove('-left-64');
+            sidebar.classList.add('left-0');
+            overlay.classList.remove('hidden');
+            burgerContainer.style.transform = 'translateX(200px)'; // Move slightly less than sidebar width
+        } else {
+            sidebar.classList.add('-left-64');
+            sidebar.classList.remove('left-0');
+            overlay.classList.add('hidden');
+            burgerContainer.style.transform = 'translateX(0)';
         }
     }
 
@@ -770,19 +851,6 @@ class SidebarComponent extends BaseComponent {
                 moveBtn.title = `Move ${count} item(s)`;
                 deleteBtn.title = `Delete ${count} item(s)`;
             }
-        }
-    }
-
-    render() {
-        this.ensureStructure();
-        this.updateFolderName();
-        this.renderItems();
-    }
-
-    ensureStructure() {
-        const sidebar = document.getElementById('sidebar');
-        if (sidebar && !sidebar.querySelector('#current-folder')) {
-            sidebar.innerHTML = SidebarHTML.structure;
         }
     }
 
