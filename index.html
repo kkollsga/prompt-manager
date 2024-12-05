@@ -3244,7 +3244,7 @@ class TextProcessor {
                 if (['radio', 'select'].includes(placeholder.type)) {
                     displayValue = placeholder.options[placeholder.value];
                 } else if (['boolean', 'bool'].includes(placeholder.type)) {
-                    displayValue = placeholder.options[placeholder.value]; // Just use value as index
+                    displayValue = placeholder.options[placeholder.value];
                 } else {
                     displayValue = placeholder.value;
                 }
@@ -3254,11 +3254,15 @@ class TextProcessor {
                 }
 
                 if (displayValue !== undefined && displayValue !== null) {
-                    const escapedValue = String(displayValue).replace(/[<>&]/g, char => ({
-                        '<': '&lt;',
-                        '>': '&gt;',
-                        '&': '&amp;'
-                    }[char]));
+                    // Escape HTML and preserve newlines by replacing them with <br>
+                    const escapedValue = String(displayValue)
+                        .replace(/[<>&]/g, char => ({
+                            '<': '&lt;',
+                            '>': '&gt;',
+                            '&': '&amp;'
+                        }[char]))
+                        .replace(/\n/g, '<br>');
+                        
                     return `<span class="placeholder-content inline-block px-1 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm font-mono whitespace-pre-wrap" role="region" aria-label="placeholder ${cleanName}">${escapedValue}</span>`;
                 }
                 
