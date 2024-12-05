@@ -2102,9 +2102,9 @@ class PromptViewManager extends BaseComponent {
         // Always get fresh state from central source
         const isFavorite = window.promptApp.isFavorite(this.prop('currentPromptId'));
         
-        button.className = isFavorite 
+        button.className = `${isFavorite 
             ? 'text-yellow-400 drop-shadow-[0_2px_3px_rgba(250,204,21,0.4)] [text-shadow:_0_0_1px_#B45309]'
-            : 'text-gray-300 hover:text-yellow-400';
+            : 'text-gray-300'} transition-colors duration-200 ${!isFavorite ? 'md:hover:text-yellow-400' : ''}`;
     }
 
 
