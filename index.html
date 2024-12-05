@@ -4249,6 +4249,26 @@ class DataManager {
         return id;
     }
 
+    updatePromptMetadata(promptId, metadata) {
+        try {
+            if (!this.data.prompts[promptId]) {
+                throw new Error('Prompt not found');
+            }
+
+            this.data.prompts[promptId] = {
+                ...this.data.prompts[promptId],
+                ...metadata
+            };
+
+            this.saveToStorage();
+            return true;
+        } catch (error) {
+            console.error('Error updating prompt metadata:', error);
+            throw error;
+        }
+    }
+
+    // Modify existing updatePrompt to focus on content updates
     updatePrompt(promptId, updatedPrompt) {
         try {
             if (!this.data.prompts[promptId]) {
@@ -4259,12 +4279,19 @@ class DataManager {
                 throw new Error('Target folder not found');
             }
 
+            // Only add to recent if content or name changes
+            const contentChanged = updatedPrompt.content !== this.data.prompts[promptId].content ||
+                                 updatedPrompt.name !== this.data.prompts[promptId].name;
+
             this.data.prompts[promptId] = {
                 ...this.data.prompts[promptId],
                 ...updatedPrompt
             };
 
-            this.addToRecent(promptId);
+            if (contentChanged) {
+                this.addToRecent(promptId);
+            }
+            
             this.saveToStorage();
             return true;
         } catch (error) {
