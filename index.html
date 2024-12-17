@@ -3122,19 +3122,30 @@ class TextProcessor {
 
     processText(content, placeholderValues = new Map(), rawMode = false, useMarkdown = true) {
         try {
+            // Process conditionals first
             let processedContent = this.ifProcessor.processConditionals(content, placeholderValues);
             const definedPlaceholders = this.getDefinedPlaceholders(processedContent);
 
+            // If raw mode, process placeholders without styling but with values
             if (rawMode) {
-                const result = this.processPlaceholders(
+                return this.processPlaceholders(
                     processedContent, 
                     placeholderValues, 
                     definedPlaceholders, 
                     true
                 ).trim();
-                return result;
             }
 
+            // First identify code blocks and protect them
+            const codeBlocks = new Map();
+            let blockId = 0;
+            processedContent = processedContent.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
+                const id = `__CODE_BLOCK_${blockId++}__`;
+                codeBlocks.set(id, { lang, code });
+                return id;
+            });
+
+            // Process placeholders outside code blocks
             processedContent = this.processHighlightMarkers(processedContent);
             processedContent = this.processPlaceholders(
                 processedContent, 
@@ -3142,12 +3153,63 @@ class TextProcessor {
                 definedPlaceholders,
                 false
             );
-            // Updated replacement to preserve original tag content
-            processedContent = processedContent.replace(
-                TextProcessor.HTML_TAG_PATTERN, 
-                (match) => match.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            );
-            
+
+            // Process code blocks separately
+            codeBlocks.forEach((block, id) => {
+                let processedCode = block.code;
+                
+                // First escape all HTML in the code block
+                processedCode = processedCode.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                
+                // Then process placeholders and un-escape our placeholder styling
+                processedCode = processedCode.replace(
+                    /&lt;(!?)(?:([a-zA-Z][a-zA-Z0-9\-_ ]*):([^&>]+)(?:\s*\[([^\]]+)\])?(?:\s*=\s*([^&>]*))?|([a-zA-Z][a-zA-Z0-9\-_ ]*))&gt;/g,
+                    (match, isHidden, name, type, options, defaultValue, simpleName) => {
+                        const cleanName = (name || simpleName)?.trim();
+                        if (!cleanName) return match;
+                        
+                        const placeholder = placeholderValues.get(cleanName);
+                        if (!placeholder || placeholder.isHidden) return match;
+                        
+                        let value = '';
+                        if (['radio', 'select'].includes(placeholder.type)) {
+                            value = placeholder.options[placeholder.value];
+                        } else if (['boolean', 'bool'].includes(placeholder.type)) {
+                            value = placeholder.options[placeholder.value];
+                        } else {
+                            value = placeholder.value;
+                        }
+                        
+                        if (value !== undefined && value !== null) {
+                            const escapedValue = String(value)
+                                .replace(/[<>&]/g, char => ({
+                                    '<': '&lt;',
+                                    '>': '&gt;',
+                                    '&': '&amp;'
+                                }[char]));
+                            
+                            return `<span class="placeholder-content inline-block px-1 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm font-mono whitespace-pre-wrap" data-prompt-placeholder="true" role="region" aria-label="placeholder ${cleanName}">${escapedValue}</span>`;
+                        }
+                        
+                        return `<span class="inline-block px-1 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-sm font-mono" data-prompt-placeholder="true" role="region" aria-label="empty placeholder ${cleanName}">&lt;${cleanName}&gt;</span>`;
+                    }
+                );
+
+                // Update the code block
+                codeBlocks.set(id, {
+                    ...block,
+                    code: processedCode
+                });
+            });
+
+            // Restore processed code blocks
+            codeBlocks.forEach((block, id) => {
+                processedContent = processedContent.replace(
+                    id, 
+                    `\`\`\`${block.lang || ''}\n${block.code}\`\`\``
+                );
+            });
+
             if (useMarkdown) {
                 processedContent = marked.parse(processedContent);
             }
@@ -3162,71 +3224,12 @@ class TextProcessor {
             return rawMode ? content?.trim() : '';
         }
     }
-
-    // Rest of the methods remain unchanged...
-    getDefinedPlaceholders(content) {
-        const definedPlaceholders = new Set();
-        content.match(TextProcessor.PLACEHOLDER_PATTERN)?.forEach(match => {
-            const [, , name] = match.match(/<(!?)([^:>]+):/) || [];
-            if (name) definedPlaceholders.add(name.trim());
-        });
-        return definedPlaceholders;
-    }
-
-    processHighlightMarkers(content) {
-        const parts = content.split(TextProcessor.HIGHLIGHT_MARKER_PATTERN);
-        return parts.map(part => {
-            if (part.startsWith('<!--BEGIN_IF_HIGHLIGHT-->')) {
-                return part.replace('<!--BEGIN_IF_HIGHLIGHT-->', '')
-                         .replace('<!--END_IF_HIGHLIGHT-->', '');
-            }
-            return part;
-        }).join('');
-    }
-
-    parsePlaceholders(content) {
-        const placeholders = new Map();
-        const placeholderRegex = /<(!?)([^:>]+):([^>\[]+)(?:\s*\[([^\]]+)\])?(?:\s*=\s*([^>]*))?>/g;
-        
-        let match;
-        while ((match = placeholderRegex.exec(content)) !== null) {
-            const [_, isHidden, name, type, options, defaultInTag] = match;
-            const cleanType = type.trim().toLowerCase();
-            
-            const details = {
-                type: cleanType,
-                isHidden: isHidden === '!',
-                displayName: name
-            };
-
-            // Handle boolean types
-            if (['boolean', 'bool'].includes(cleanType)) {
-                details.options = options ? options.split(',').map(o => o.trim()) : ['False', 'True'];
-                details.value = 0; 
-            }
-
-            // Handle other option types
-            else if (options) {
-                details.options = options.split(',').map(o => o.trim());
-                if (['radio', 'select'].includes(cleanType) && details.options.length > 0) {
-                    if (defaultInTag) {
-                        const index = details.options.findIndex(opt => 
-                            opt.trim().toLowerCase() === defaultInTag.trim().toLowerCase());
-                        details.value = index >= 0 ? index : 0;
-                    } else {
-                        details.value = 0;
-                    }
-                }
-            }
-            placeholders.set(name, details);
-        }
-
-        return placeholders;
-    }
-
+    
     processPlaceholders(content, placeholders, definedPlaceholders, rawMode = false) {
+        const validPlaceholderRegex = /<(!?)(?:([a-zA-Z][a-zA-Z0-9\-_ ]*):([^>\[]+)(?:\s*\[([^\]]+)\])?(?:\s*=\s*([^>]*))?|([a-zA-Z][a-zA-Z0-9\-_ ]*))>/g;
+
         return content.replace(
-            TextProcessor.PLACEHOLDER_PATTERN,
+            validPlaceholderRegex,
             (match, isHidden, name, type, placeholderOptions, defaultValue, simpleName) => {
                 const cleanName = (name || simpleName)?.trim();
                 if (!cleanName) return match;
@@ -3250,11 +3253,11 @@ class TextProcessor {
                 }
                 
                 if (rawMode) {
-                    return displayValue || `<${cleanName}>`;
+                    return displayValue !== undefined && displayValue !== null ? 
+                        String(displayValue) : `<${cleanName}>`;
                 }
 
                 if (displayValue !== undefined && displayValue !== null) {
-                    // Escape HTML and preserve newlines by replacing them with <br>
                     const escapedValue = String(displayValue)
                         .replace(/[<>&]/g, char => ({
                             '<': '&lt;',
@@ -3262,13 +3265,86 @@ class TextProcessor {
                             '&': '&amp;'
                         }[char]))
                         .replace(/\n/g, '<br>');
-                        
-                    return `<span class="placeholder-content inline-block px-1 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm font-mono whitespace-pre-wrap" role="region" aria-label="placeholder ${cleanName}">${escapedValue}</span>`;
+                            
+                    return `<span class="placeholder-content inline-block px-1 py-0.5 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-sm font-mono whitespace-pre-wrap" data-prompt-placeholder="true" role="region" aria-label="placeholder ${cleanName}">${escapedValue}</span>`;
                 }
                 
-                return `<span class="inline-block px-1 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-sm font-mono" role="region" aria-label="empty placeholder ${cleanName}">&lt;${cleanName}&gt;</span>`;
+                return `<span class="inline-block px-1 py-0.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded text-sm font-mono" data-prompt-placeholder="true" role="region" aria-label="empty placeholder ${cleanName}">&lt;${cleanName}&gt;</span>`;
             }
         );
+    }
+
+    getDefinedPlaceholders(content) {
+        const definedPlaceholders = new Set();
+        content.match(TextProcessor.PLACEHOLDER_PATTERN)?.forEach(match => {
+            const [, , name] = match.match(/<(!?)([^:>]+):/) || [];
+            if (name) definedPlaceholders.add(name.trim());
+        });
+        return definedPlaceholders;
+    }
+
+    processHighlightMarkers(content) {
+        const parts = content.split(TextProcessor.HIGHLIGHT_MARKER_PATTERN);
+        return parts.map(part => {
+            if (part.startsWith('<!--BEGIN_IF_HIGHLIGHT-->')) {
+                return part.replace('<!--BEGIN_IF_HIGHLIGHT-->', '')
+                         .replace('<!--END_IF_HIGHLIGHT-->', '');
+            }
+            return part;
+        }).join('');
+    }
+
+    static isValidPlaceholderName(name) {
+        // Allow uppercase and lowercase letters in names
+        return /^[a-zA-Z][a-zA-Z0-9\-_ ]*$/.test(name.trim());
+    }
+
+    parsePlaceholders(content) {
+        const placeholders = new Map();
+        const placeholderRegex = /<(!?)([^:>]+):([^>\[]+)(?:\s*\[([^\]]+)\])?(?:\s*=\s*([^>]*))?>/g;
+        
+        let match;
+        let searchFrom = 0;
+        
+        while ((match = placeholderRegex.exec(content)) !== null) {
+            const [fullMatch, isHidden, name, type, options, defaultInTag] = match;
+            
+            // Skip if name is not valid
+            const trimmedName = name.trim();
+            if (!TextProcessor.isValidPlaceholderName(trimmedName)) {
+                // Set lastIndex to continue search after current match
+                placeholderRegex.lastIndex = match.index + 1;
+                continue;
+            }
+
+            const cleanType = type.trim().toLowerCase();
+            
+            const details = {
+                type: cleanType,
+                isHidden: isHidden === '!',
+                displayName: trimmedName
+            };
+
+            // Rest of existing logic remains unchanged
+            if (['boolean', 'bool'].includes(cleanType)) {
+                details.options = options ? options.split(',').map(o => o.trim()) : ['False', 'True'];
+                details.value = 0; 
+            } else if (options) {
+                details.options = options.split(',').map(o => o.trim());
+                if (['radio', 'select'].includes(cleanType) && details.options.length > 0) {
+                    if (defaultInTag) {
+                        const index = details.options.findIndex(opt => 
+                            opt.trim().toLowerCase() === defaultInTag.trim().toLowerCase());
+                        details.value = index >= 0 ? index : 0;
+                    } else {
+                        details.value = 0;
+                    }
+                }
+            }
+            placeholders.set(trimmedName, details);
+        }
+
+        return placeholders;
     }
 }
 
@@ -4598,7 +4674,7 @@ class StyleManager {
             headings: '.markdown-content h1,.markdown-content h2,.markdown-content h3,.markdown-content h4{font-weight:600;line-height:1.25;margin-top:1.5em;margin-bottom:.75em}.markdown-content h1{font-size:2em}.markdown-content h2{font-size:1.5em}.markdown-content h3{font-size:1.25em}.markdown-content h4{font-size:1em}.dark .markdown-content h1,.dark .markdown-content h2,.dark .markdown-content h3,.dark .markdown-content h4{color:#E5E7EB}',
             text: '.markdown-content p{margin-top:1.25em;margin-bottom:1.25em}.markdown-content blockquote{border-left:4px solid #E5E7EB;margin:1.25em 0;padding-left:1em;font-style:italic;color:#6B7280}.dark .markdown-content blockquote{border-left-color:#4B5563;color:#9CA3AF}',
             lists: '.markdown-content ul,.markdown-content ol{margin-top:1em;margin-bottom:1em;padding-left:1.625em;list-style-type:disc}.markdown-content ol{list-style-type:decimal}.markdown-content li{margin-top:.5em;margin-bottom:.5em}',
-            code: '.markdown-content pre{background-color:#f3f4f6;border:1px solid #e5e7eb;margin:1rem 0;padding:1rem;border-radius:0.375rem}.dark .markdown-content pre{background-color:#111827;border-color:#030712}.markdown-content code{font-family:monospace;font-size:0.875em;background:transparent}.markdown-content :not(pre)>code{padding:0.2em 0.4em;border-radius:0.25rem}',
+            code: '.markdown-content pre{background-color:#f3f4f6;border:1px solid #e5e7eb;margin:1rem 0;padding:1rem;border-radius:0.375rem;overflow-x:auto}.dark .markdown-content pre{background-color:#111827;border-color:#030712}.markdown-content pre code{font-family:monospace;font-size:0.875em;white-space:pre;word-wrap:normal;display:block}.markdown-content :not(pre)>code{font-family:monospace;font-size:0.875em;background:transparent;padding:0.2em 0.4em;border-radius:0.25rem;white-space:normal}',
             tables: '.markdown-content table{width:100%;border-collapse:collapse;margin:1.25em 0}.markdown-content th,.markdown-content td{border:1px solid #E5E7EB;padding:.5em .75em;text-align:left}.dark .markdown-content th,.dark .markdown-content td{border-color:#4B5563}.markdown-content th{background-color:#F9FAFB;font-weight:600}.dark .markdown-content th{background-color:#374151}',
             placeholders: '.markdown-content .placeholder-value{display:inline-block;padding:.125em .375em;border-radius:.25em;background-color:#E5E7EB;font-family:monospace}.dark .markdown-content .placeholder-value{background-color:#4B5563}'
         };
