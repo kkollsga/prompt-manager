@@ -1010,13 +1010,14 @@ class WelcomeHTML {
 
     static promptCard(prompt, isFavorite = false, previewText) {
         return `
-            <div class="relative bg-white dark:bg-gray-800 shadow-md rounded-lg p-4 cursor-pointer 
-                border border-gray-200 dark:border-gray-700 
-                hover:shadow-lg hover:border-primary/20 dark:hover:border-primary/40 
-                transition-all duration-200"
+            <div class="relative bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 cursor-pointer 
+                        border border-gray-200 dark:border-gray-600
+                        hover:bg-white dark:hover:bg-gray-800
+                        hover:border-primary/30 dark:hover:border-primary/30
+                        transition-all duration-200"
                 data-prompt-id="${prompt.id}">
                 <div class="flex justify-between items-start mb-2">
-                    <h3 class="font-bold text-lg text-gray-800 dark:text-gray-200">${prompt.name}</h3>
+                    <h3 class="font-medium text-primary">${prompt.name}</h3>
                     ${isFavorite ? `
                         <i class="fas fa-star text-yellow-400 drop-shadow-[0_2px_3px_rgba(250,204,21,0.4)] [text-shadow:_0_0_1px_#B45309]"></i>
                     ` : ''}
@@ -1024,7 +1025,7 @@ class WelcomeHTML {
                 <p class="text-sm text-gray-600 dark:text-gray-300 leading-5 min-h-[2.5rem] max-h-[2.5rem] overflow-hidden">
                     ${previewText}
                 </p>
-                <div class="absolute inset-0 bg-gray-50 dark:bg-gray-700/50 opacity-0 hover:opacity-100 transition-opacity duration-200 rounded-lg"></div>
+                <div class="absolute inset-0 bg-primary/5 dark:bg-primary/10 opacity-0 hover:opacity-100 transition-opacity duration-200 rounded-lg"></div>
             </div>
         `;
     }
@@ -1544,7 +1545,7 @@ class WelcomeComponent extends BaseComponent {
 ====================================
 */
 class PromptViewHTML {
-   static get structure() {
+    static get structure() {
        return `
            <div class="bg-white dark:bg-gray-800 shadow-md rounded-lg p-6">
                <!-- Header -->
@@ -1557,7 +1558,7 @@ class PromptViewHTML {
                        </button>
                        <div id="prompt-title-container" class="relative">
                            <h2 id="prompt-title" 
-                               class="text-2xl font-bold text-gray-800 dark:text-gray-200 min-w-[200px] min-h-[36px] px-2 py-1 rounded
+                               class="text-2xl font-bold text-primary min-w-[200px] min-h-[36px] px-2 py-1 rounded
                                       empty:before:content-[attr(data-placeholder)] empty:before:text-gray-400 dark:empty:before:text-gray-500
                                       focus:outline-none focus:ring-2 focus:ring-primary/20 dark:focus:ring-primary/40"
                                contenteditable="false"
