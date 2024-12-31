@@ -3537,45 +3537,46 @@ class IfProcessor {
                 return { result: false };
             }
 
+            // Handle negation first
+            const isNegated = condition.startsWith('not ') || condition.startsWith('~');
+            const normalizedCondition = isNegated ? condition.replace(/^(not |~)/, '').trim() : condition;
+
             // Normalize reversed operators first
-            const normalizedCondition = condition
+            const adjustedCondition = normalizedCondition
                 .replace(/=</g, '<=')
                 .replace(/=>/g, '>=');
 
             // Check for comparison operators (<, <=, =, >=, >)
-            const comparisonMatch = normalizedCondition.match(/^(\w+)\s*([<>=]=?|={1,3})\s*(.+)$/);
+            const comparisonMatch = adjustedCondition.match(/^(\w+)\s*([<>=]=?|={1,3})\s*(.+)$/);
             if (comparisonMatch) {
                 const [, left, operator, right] = comparisonMatch;
                 const lookupKey = left.replace(/_/g, ' ');
                 const placeholder = this.values.get(lookupKey);
                 
-                // Early returns for invalid cases
                 if (!placeholder || placeholder.value === null || placeholder.value === undefined) {
                     console.warn(`Invalid placeholder value for ${lookupKey}`);
-                    return { result: false };
+                    return { result: isNegated };
                 }
 
-                // Handle equality comparisons separately
+                let result;
+                // Handle equality comparisons
                 if (operator === '=' || operator === '==' || operator === '===') {
                     if (['radio', 'select', 'str', 'text'].includes(placeholder.type)) {
-                        // For option-based types, compare with options
-                        if (['radio', 'select'].includes(placeholder.type)) {
-                            const optionValue = placeholder.options[placeholder.value];
-                            return { result: optionValue === right.trim() };
-                        }
-                        // For string types, direct comparison
-                        return { result: String(placeholder.value).trim() === right.trim() };
+                        result = placeholder.options ? 
+                            placeholder.options[placeholder.value] === right.trim() :
+                            String(placeholder.value).trim() === right.trim();
+                    } else {
+                        const leftValue = parseFloat(placeholder.value);
+                        const rightValue = parseFloat(right);
+                        result = leftValue === rightValue;
                     }
-                    // For numeric types, fallback to numeric comparison
-                    const leftValue = parseFloat(placeholder.value);
-                    const rightValue = parseFloat(right);
-                    return { result: leftValue === rightValue };
+                    return { result: isNegated ? !result : result };
                 }
 
                 // Numeric comparisons
                 if (!['int', 'float'].includes(placeholder.type)) {
                     console.warn(`Invalid type for numeric comparison: ${placeholder.type}`);
-                    return { result: false };
+                    return { result: isNegated };
                 }
 
                 const leftValue = parseFloat(placeholder.value);
@@ -3583,25 +3584,26 @@ class IfProcessor {
                 
                 if (isNaN(leftValue) || isNaN(rightValue)) {
                     console.warn('Invalid numeric values for comparison');
-                    return { result: false };
+                    return { result: isNegated };
                 }
 
                 switch(operator) {
-                    case '<': return { result: leftValue < rightValue };
-                    case '<=': return { result: leftValue <= rightValue };
-                    case '>': return { result: leftValue > rightValue };
-                    case '>=': return { result: leftValue >= rightValue };
+                    case '<': result = leftValue < rightValue; break;
+                    case '<=': result = leftValue <= rightValue; break;
+                    case '>': result = leftValue > rightValue; break;
+                    case '>=': result = leftValue >= rightValue; break;
                     default:
                         console.warn(`Unsupported operator: ${operator}`);
-                        return { result: false };
+                        return { result: isNegated };
                 }
+                return { result: isNegated ? !result : result };
             }
 
             // Handle boolean evaluation
-            const normalizedCondition2 = normalizedCondition.trim().replace(/_/g, ' ');
-            const placeholder = this.values.get(normalizedCondition2);
-            if (!placeholder) return { result: false };
-            return { result: Boolean(placeholder.value) };
+            const lookupKey = normalizedCondition.trim().replace(/_/g, ' ');
+            const placeholder = this.values.get(lookupKey);
+            if (!placeholder) return { result: isNegated };
+            return { result: isNegated ? !Boolean(placeholder.value) : Boolean(placeholder.value) };
         } catch (error) {
             console.error('Condition evaluation error:', error, {
                 condition,
