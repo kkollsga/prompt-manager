@@ -3537,36 +3537,65 @@ class IfProcessor {
                 return { result: false };
             }
 
-            // Check for equality comparison operators
-            const comparisonMatch = condition.match(/^(\w+)\s*(={1,3})\s*(.+)$/);
+            // Normalize reversed operators first
+            const normalizedCondition = condition
+                .replace(/=</g, '<=')
+                .replace(/=>/g, '>=');
+
+            // Check for comparison operators (<, <=, =, >=, >)
+            const comparisonMatch = normalizedCondition.match(/^(\w+)\s*([<>=]=?|={1,3})\s*(.+)$/);
             if (comparisonMatch) {
                 const [, left, operator, right] = comparisonMatch;
                 const lookupKey = left.replace(/_/g, ' ');
                 const placeholder = this.values.get(lookupKey);
-                if (!placeholder) return { result: false };
                 
-                // For bool and options-based types, just compare against option string
-                if (['radio', 'select', 'bool', 'boolean'].includes(placeholder.type) && placeholder.options) {
-                    const rightValue = right.trim();
-                    const optionValue = placeholder.options[placeholder.value];
-                    return { 
-                        result: String(optionValue).toLowerCase() === rightValue.toLowerCase()
-                    };
+                // Early returns for invalid cases
+                if (!placeholder || placeholder.value === null || placeholder.value === undefined) {
+                    console.warn(`Invalid placeholder value for ${lookupKey}`);
+                    return { result: false };
                 }
+
+                // Type checking for numeric comparisons
+                if (operator !== '=' && operator !== '==' && operator !== '===') {
+                    if (!['int', 'float'].includes(placeholder.type)) {
+                        console.warn(`Invalid type for numeric comparison: ${placeholder.type}`);
+                        return { result: false };
+                    }
+                }
+
+                const leftValue = parseFloat(placeholder.value);
+                const rightValue = parseFloat(right);
                 
-                // For other types, direct comparison
-                return { 
-                    result: String(placeholder.value) === String(right.trim())
-                };
+                if (isNaN(leftValue) || isNaN(rightValue)) {
+                    console.warn('Invalid numeric values for comparison');
+                    return { result: false };
+                }
+
+                switch(operator) {
+                    case '<': return { result: leftValue < rightValue };
+                    case '<=': return { result: leftValue <= rightValue };
+                    case '>': return { result: leftValue > rightValue };
+                    case '>=': return { result: leftValue >= rightValue };
+                    case '=':
+                    case '==':
+                    case '===':
+                        return { result: leftValue === rightValue };
+                    default:
+                        console.warn(`Unsupported operator: ${operator}`);
+                        return { result: false };
+                }
             }
 
-            // Direct boolean evaluation (e.g., "if SomeBoolean")
-            const normalizedCondition = condition.trim().replace(/_/g, ' ');
-            const placeholder = this.values.get(normalizedCondition);
+            // Handle boolean evaluation
+            const normalizedCondition2 = normalizedCondition.trim().replace(/_/g, ' ');
+            const placeholder = this.values.get(normalizedCondition2);
             if (!placeholder) return { result: false };
             return { result: Boolean(placeholder.value) };
         } catch (error) {
-            console.error('Condition evaluation error:', error);
+            console.error('Condition evaluation error:', error, {
+                condition,
+                values: this.values
+            });
             return { result: false };
         }
     }
