@@ -3555,12 +3555,27 @@ class IfProcessor {
                     return { result: false };
                 }
 
-                // Type checking for numeric comparisons
-                if (operator !== '=' && operator !== '==' && operator !== '===') {
-                    if (!['int', 'float'].includes(placeholder.type)) {
-                        console.warn(`Invalid type for numeric comparison: ${placeholder.type}`);
-                        return { result: false };
+                // Handle equality comparisons separately
+                if (operator === '=' || operator === '==' || operator === '===') {
+                    if (['radio', 'select', 'str', 'text'].includes(placeholder.type)) {
+                        // For option-based types, compare with options
+                        if (['radio', 'select'].includes(placeholder.type)) {
+                            const optionValue = placeholder.options[placeholder.value];
+                            return { result: optionValue === right.trim() };
+                        }
+                        // For string types, direct comparison
+                        return { result: String(placeholder.value).trim() === right.trim() };
                     }
+                    // For numeric types, fallback to numeric comparison
+                    const leftValue = parseFloat(placeholder.value);
+                    const rightValue = parseFloat(right);
+                    return { result: leftValue === rightValue };
+                }
+
+                // Numeric comparisons
+                if (!['int', 'float'].includes(placeholder.type)) {
+                    console.warn(`Invalid type for numeric comparison: ${placeholder.type}`);
+                    return { result: false };
                 }
 
                 const leftValue = parseFloat(placeholder.value);
@@ -3576,10 +3591,6 @@ class IfProcessor {
                     case '<=': return { result: leftValue <= rightValue };
                     case '>': return { result: leftValue > rightValue };
                     case '>=': return { result: leftValue >= rightValue };
-                    case '=':
-                    case '==':
-                    case '===':
-                        return { result: leftValue === rightValue };
                     default:
                         console.warn(`Unsupported operator: ${operator}`);
                         return { result: false };
