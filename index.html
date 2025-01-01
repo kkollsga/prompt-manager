@@ -1289,29 +1289,33 @@ print("Hello World")
                 </p>
 
                 <div class="space-y-4">
-                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Basic If Statement</h4>
+                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Basic Syntax</h4>
                     <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
-{if variable}content to include{/if}</pre>
+    {if variable}content to include{/if}
+    {if not variable}content if variable is false/empty{/if}
+    {if ~variable}short syntax for negation{/if}</pre>
                 </div>
 
                 <div class="space-y-4">
                     <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">If-Else Statement</h4>
                     <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
-{if variable}content if true{else}content if false{/if}</pre>
+    {if variable}content if true{else}content if false{/if}
+    {if not variable}content if false{else}content if true{/if}</pre>
                 </div>
 
                 <div class="space-y-4">
                     <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200">Complex Example</h4>
                     <pre class="bg-gray-100 dark:bg-gray-900 p-4 rounded-lg font-mono text-base overflow-x-auto border border-gray-200 dark:border-gray-700">
-&lt;!expertise:radio[basic,intermediate,advanced]&gt;
+    &lt;!expertise:radio[basic,intermediate,advanced]&gt;
+    &lt;!show_details:bool&gt;
 
-{if expertise=advanced}
-    Provide a detailed technical analysis...
-{else if expertise=intermediate}
-    Explain with moderate technical detail...
-{else}
-    Explain in simple terms...
-{/if}</pre>
+    {if expertise=advanced}
+        Provide a detailed technical analysis...
+    {else if not show_details}
+        Show simplified overview...
+    {else}
+        Show standard explanation...
+    {/if}</pre>
                 </div>
 
                 <div class="space-y-4">
@@ -1319,15 +1323,15 @@ print("Hello World")
                     <ul class="space-y-3 text-base text-gray-700 dark:text-gray-300">
                         <li class="flex items-center gap-3">
                             <i class="fas fa-check text-primary"></i>
+                            <span>Use 'not' or '~' for negation (e.g., {if not variable} or {if ~variable})</span>
+                        </li>
+                        <li class="flex items-center gap-3">
+                            <i class="fas fa-check text-primary"></i>
                             <span>Conditions support equality checks (variable=value)</span>
                         </li>
                         <li class="flex items-center gap-3">
                             <i class="fas fa-check text-primary"></i>
-                            <span>Nested conditions are supported</span>
-                        </li>
-                        <li class="flex items-center gap-3">
-                            <i class="fas fa-check text-primary"></i>
-                            <span>Use with boolean placeholders for simple toggles</span>
+                            <span>Numeric comparisons supported (&lt;, &lt;=, =, &gt;=, &gt;)</span>
                         </li>
                         <li class="flex items-center gap-3">
                             <i class="fas fa-check text-primary"></i>
