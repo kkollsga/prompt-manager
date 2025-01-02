@@ -434,6 +434,9 @@ class SidebarComponent extends BaseComponent {
         this.selectedItems = new Set();
         this.activePromptId = null;
         this.isMobileMenuOpen = false;
+        this.isSelectionMode = false;
+        this.touchTimeout = null;
+        this.touchStartY = 0;
     }
 
     setActivePrompt(promptId) {
@@ -467,7 +470,7 @@ class SidebarComponent extends BaseComponent {
     setupEventListeners() {
         this.ensureStructure();
 
-        // Existing action button listeners
+        // Action button listeners
         const actionButtons = {
             'back-arrow': () => this.handleNavigateUp(),
             'new-folder-btn': () => this.handleNewFolder(),
@@ -476,7 +479,6 @@ class SidebarComponent extends BaseComponent {
             'export-btn': () => this.handleExport(),
             'delete-selected-btn': () => this.handleDeleteSelected(),
             'move-selected-btn': () => this.handleMoveSelected(),
-            // Add burger menu listener
             'sidebar-toggle': () => this.toggleMobileMenu()
         };
 
@@ -493,9 +495,22 @@ class SidebarComponent extends BaseComponent {
             this.eventHandler.bind(overlay, 'click', () => this.toggleMobileMenu());
         }
 
-        // Item list click handlers
+        // Item list click and touch handlers
         const itemList = document.getElementById('item-list');
-        this.eventHandler.bind(itemList, 'click', (e) => this.handleItemClick(e));
+        if (itemList) {
+            this.eventHandler.bind(itemList, 'click', (e) => this.handleItemClick(e));
+            this.eventHandler.bind(itemList, 'touchstart', (e) => this.handleTouchStart(e));
+            this.eventHandler.bind(itemList, 'touchend', (e) => this.handleTouchEnd(e));
+            this.eventHandler.bind(itemList, 'touchmove', (e) => this.handleTouchMove(e));
+        }
+
+        // Handle clicks outside item list to exit selection mode
+        this.eventHandler.bind(document, 'click', (e) => {
+            if (this.isSelectionMode && !e.target.closest('#item-list') && 
+                !e.target.closest('#selection-actions')) {
+                this.exitSelectionMode();
+            }
+        });
 
         // Keyboard shortcuts
         this.eventHandler.bind(document, 'keydown', (e) => this.handleKeyboardShortcuts(e));
@@ -561,22 +576,19 @@ class SidebarComponent extends BaseComponent {
         let metaThemeColor = document.querySelector('meta[name="theme-color"]');
         let metaStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
         
-        // Create theme-color meta if it doesn't exist
         if (!metaThemeColor) {
             metaThemeColor = document.createElement('meta');
             metaThemeColor.name = 'theme-color';
             document.head.appendChild(metaThemeColor);
         }
 
-        // Create status-bar meta if it doesn't exist
         if (!metaStatusBar) {
             metaStatusBar = document.createElement('meta');
             metaStatusBar.name = 'apple-mobile-web-app-status-bar-style';
             document.head.appendChild(metaStatusBar);
         }
 
-        // Now safely set the content
-        const color = isDark ? '#111827' : '#FFFFFF'; // Using Tailwind's gray-900 for dark and white for light
+        const color = isDark ? '#111827' : '#FFFFFF';
         metaThemeColor.content = color;
         metaStatusBar.content = isDark ? 'black-translucent' : 'default';
     }
@@ -591,13 +603,79 @@ class SidebarComponent extends BaseComponent {
             sidebar.classList.remove('-left-64');
             sidebar.classList.add('left-0');
             overlay.classList.remove('hidden');
-            burgerContainer.style.transform = 'translateX(200px)'; // Move slightly less than sidebar width
+            burgerContainer.style.transform = 'translateX(200px)';
         } else {
             sidebar.classList.add('-left-64');
             sidebar.classList.remove('left-0');
             overlay.classList.add('hidden');
             burgerContainer.style.transform = 'translateX(0)';
         }
+    }
+
+    handleTouchStart(e) {
+        if (e.touches.length !== 1) return; // Only handle single touches
+
+        const item = e.target.closest('li[data-id]');
+        if (!item) return;
+
+        this.touchStartY = e.touches[0].clientY;
+        
+        // Clear any existing timeout
+        if (this.touchTimeout) clearTimeout(this.touchTimeout);
+        
+        // Set new timeout for long press
+        this.touchTimeout = setTimeout(() => {
+            if (!this.isSelectionMode) {
+                this.isSelectionMode = true;
+                this.handleSelection(item.dataset.id, item.dataset.type);
+                this.render();
+                // Provide haptic feedback if available
+                if (window.navigator.vibrate) {
+                    window.navigator.vibrate(50);
+                }
+            }
+        }, 500); // 500ms for long press
+    }
+
+    handleTouchMove(e) {
+        if (!this.touchStartY) return;
+        
+        // Calculate move distance
+        const moveDistance = Math.abs(e.touches[0].clientY - this.touchStartY);
+        
+        // If moved more than 10px, cancel long press
+        if (moveDistance > 10) {
+            clearTimeout(this.touchTimeout);
+            this.touchTimeout = null;
+        }
+    }
+
+    handleTouchEnd(e) {
+        clearTimeout(this.touchTimeout);
+        this.touchTimeout = null;
+        this.touchStartY = 0;
+
+        const item = e.target.closest('li[data-id]');
+        if (!item) return;
+
+        if (this.isSelectionMode) {
+            e.preventDefault();
+            this.handleSelection(item.dataset.id, item.dataset.type);
+            if (this.selectedItems.size === 0) {
+                this.exitSelectionMode();
+            }
+            this.render();
+        } else {
+            // Normal item click handling
+            this.handleItemClick(e);
+        }
+    }
+
+    exitSelectionMode() {
+        this.isSelectionMode = false;
+        this.selectedItems.clear();
+        this.render();
+        this.updateActionButtons();
     }
 
     handleItemClick(e) {
@@ -607,7 +685,7 @@ class SidebarComponent extends BaseComponent {
         const id = item.dataset.id;
         const type = item.dataset.type;
 
-        if (e.ctrlKey || e.metaKey) {
+        if (this.isSelectionMode || e.ctrlKey || e.metaKey) {
             this.handleSelection(id, type);
         } else {
             // Clear selection
@@ -625,23 +703,6 @@ class SidebarComponent extends BaseComponent {
         this.updateActionButtons();
     }
 
-    handleSelection(id, type) {
-        // Find existing item in set that matches id and type
-        const existingItem = Array.from(this.selectedItems)
-            .find(item => item.id === id && item.type === type);
-        
-        if (existingItem) {
-            this.selectedItems.delete(existingItem);
-        } else {
-            this.selectedItems.add({id, type}); 
-        }
-    }
-
-    isSelected(id) {
-        return Array.from(this.selectedItems)
-            .some(item => item.id === id);
-    }
-    
     handleKeyboardShortcuts(e) {
         // Delete selected items
         if (e.key === 'Delete' && this.selectedItems.size > 0) {
@@ -797,6 +858,8 @@ class SidebarComponent extends BaseComponent {
             if (!moveSelect.contains(e.target) && !e.target.closest('#move-selected-btn')) {
                 restoreButtons();
             }
+            moveSelect.addEventListener('change', handleChange);
+            document.addEventListener('click', handleOutsideClick);
         };
 
         moveSelect.addEventListener('change', handleChange);
@@ -837,6 +900,18 @@ class SidebarComponent extends BaseComponent {
         this.render();
     }
 
+    handleSelection(id, type) {
+        // Find existing item in set that matches id and type
+        const existingItem = Array.from(this.selectedItems)
+            .find(item => item.id === id && item.type === type);
+
+        if (existingItem) {
+            this.selectedItems.delete(existingItem);
+        } else {
+            this.selectedItems.add({id, type}); 
+        }
+    }
+
     isSelected(id) {
         return Array.from(this.selectedItems).some(item => item.id === id);
     }
@@ -852,12 +927,12 @@ class SidebarComponent extends BaseComponent {
 
     updateActionButtons() {
         const hasSelection = this.selectedItems.size > 0;
-        
+
         // Toggle visibility of action groups
         const defaultActions = document.getElementById('default-actions');
         const selectionActions = document.getElementById('selection-actions');
         const moveSelect = document.getElementById('move-folder-select');
-        
+
         if (defaultActions && selectionActions) {
             defaultActions.classList.toggle('hidden', hasSelection);
             selectionActions.classList.toggle('hidden', !hasSelection);
@@ -917,6 +992,8 @@ class SidebarComponent extends BaseComponent {
         itemList.innerHTML = html || '<p class="text-gray-500 p-2">This folder is empty</p>';
     }
 }
+
+        
 
 /*
 ====================================
