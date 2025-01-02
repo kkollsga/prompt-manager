@@ -380,7 +380,7 @@ class SidebarHTML {
         return `
             <li class="relative flex items-center p-2 rounded-lg cursor-pointer transition-all border border-white dark:border-gray-800 
                        ${isSelected ? 'border-primary/30 dark:border-primary/30' : 'hover:border-primary/30 dark:hover:border-primary/30'}
-                       group"
+                       group select-none"
                 data-id="${id}" 
                 data-type="folder">
                 <div class="flex items-center flex-1">
@@ -401,7 +401,7 @@ class SidebarHTML {
                            'border-primary/30 dark:border-primary/30' : 
                            'border-white dark:border-gray-800 hover:border-primary/30 dark:hover:border-primary/30'
                        }
-                       group"
+                       group select-none"
                 data-id="${id}" 
                 data-type="prompt">
                 <div class="flex items-center flex-1">
@@ -613,10 +613,13 @@ class SidebarComponent extends BaseComponent {
     }
 
     handleTouchStart(e) {
-        if (e.touches.length !== 1) return; // Only handle single touches
+        if (e.touches.length !== 1) return;
 
         const item = e.target.closest('li[data-id]');
         if (!item) return;
+
+        // Prevent text selection
+        e.preventDefault();
 
         this.touchStartY = e.touches[0].clientY;
         
@@ -634,7 +637,7 @@ class SidebarComponent extends BaseComponent {
                     window.navigator.vibrate(50);
                 }
             }
-        }, 500); // 500ms for long press
+        }, 500);
     }
 
     handleTouchMove(e) {
