@@ -662,12 +662,21 @@ class SidebarComponent extends BaseComponent {
         if (!item) return;
 
         if (this.isSelectionMode) {
-            e.preventDefault();
+            e.preventDefault(); // Prevent click event
+            e.stopPropagation(); // Prevent bubbling
+
+            // Handle selection
             this.handleSelection(item.dataset.id, item.dataset.type);
+            
+            // Check if we should exit selection mode
             if (this.selectedItems.size === 0) {
+            requestAnimationFrame(() => {
                 this.exitSelectionMode();
-            }
+                this.render();
+            });
+            } else {
             this.render();
+            }
         } else {
             // Normal item click handling
             this.handleItemClick(e);
