@@ -627,12 +627,12 @@ class SidebarComponent extends BaseComponent {
         if (this.touchTimeout) clearTimeout(this.touchTimeout);
         
         // Set new timeout for long press
-        this.touchTimeout = setTimeout(() => {
+        setTimeout(() => {
             if (!this.isSelectionMode) {
                 this.isSelectionMode = true;
                 this.handleSelection(item.dataset.id, item.dataset.type);
                 this.render();
-                // Provide haptic feedback if available
+                this.updateActionButtons();  // Make sure this is called
                 if (window.navigator.vibrate) {
                     window.navigator.vibrate(50);
                 }
@@ -907,14 +907,14 @@ class SidebarComponent extends BaseComponent {
         // Find existing item in set that matches id and type
         const existingItem = Array.from(this.selectedItems)
             .find(item => item.id === id && item.type === type);
-
+        
         if (existingItem) {
             this.selectedItems.delete(existingItem);
         } else {
             this.selectedItems.add({id, type}); 
         }
+        this.updateActionButtons();  // Make sure this is called
     }
-
     isSelected(id) {
         return Array.from(this.selectedItems).some(item => item.id === id);
     }
@@ -930,15 +930,15 @@ class SidebarComponent extends BaseComponent {
 
     updateActionButtons() {
         const hasSelection = this.selectedItems.size > 0;
-
+        
         // Toggle visibility of action groups
         const defaultActions = document.getElementById('default-actions');
         const selectionActions = document.getElementById('selection-actions');
         const moveSelect = document.getElementById('move-folder-select');
-
+        
         if (defaultActions && selectionActions) {
-            defaultActions.classList.toggle('hidden', hasSelection);
-            selectionActions.classList.toggle('hidden', !hasSelection);
+            defaultActions.classList.toggle('hidden', hasSelection || this.isSelectionMode);
+            selectionActions.classList.toggle('hidden', !hasSelection && !this.isSelectionMode);
             
             if (moveSelect) {
                 moveSelect.classList.add('hidden');
@@ -947,7 +947,7 @@ class SidebarComponent extends BaseComponent {
         }
 
         // Update button titles if needed
-        if (hasSelection) {
+        if (hasSelection || this.isSelectionMode) {
             const moveBtn = document.getElementById('move-selected-btn');
             const deleteBtn = document.getElementById('delete-selected-btn');
             
