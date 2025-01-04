@@ -427,13 +427,149 @@ class SidebarHTML {
     }
 }
 
+class SelectionManager {
+    constructor(sidebar) {
+        this.sidebar = sidebar;
+        this.selectedItems = new Set();
+        this.isSelectionMode = false;
+    }
+
+    // Selection Mode Management
+    enterSelectionMode() {
+        this.isSelectionMode = true;
+        this.updateActionButtons();
+    }
+
+    exitSelectionMode() {
+        this.isSelectionMode = false;
+        this.selectedItems.clear();
+        this.updateActionButtons();
+    }
+
+    // Selection State Management
+    toggleSelection(id, type) {
+        // Find existing item in set that matches id and type
+        const existingItem = Array.from(this.selectedItems)
+            .find(item => item.id === id && item.type === type);
+        
+        if (existingItem) {
+            this.selectedItems.delete(existingItem);
+        } else {
+            this.selectedItems.add({id, type});
+        }
+
+        if (this.selectedItems.size === 0) {
+            this.exitSelectionMode();
+        } else if (!this.isSelectionMode) {
+            this.enterSelectionMode();
+        }
+
+        this.updateActionButtons();
+    }
+
+    isSelected(id) {
+        return Array.from(this.selectedItems)
+            .some(item => item.id === id);
+    }
+
+    hasSelectedItems() {
+        return this.selectedItems.size > 0;
+    }
+
+    clearSelection() {
+        this.selectedItems.clear();
+        this.exitSelectionMode();
+    }
+
+    getSelectedItems() {
+        return Array.from(this.selectedItems);
+    }
+
+    // Operations
+    handleMoveSelected(targetFolderId) {
+        if (this.selectedItems.size === 0) return;
+
+        const success = window.promptApp.moveItemsToFolder(
+            Array.from(this.selectedItems), 
+            targetFolderId
+        );
+
+        if (success) {
+            this.clearSelection();
+        }
+    }
+
+    handleDeleteSelected() {
+        if (this.selectedItems.size === 0) return;
+
+        const itemCount = this.selectedItems.size;
+        const itemType = Array.from(this.selectedItems)[0].type;
+        const isMultipleTypes = Array.from(this.selectedItems)
+            .some(item => item.type !== itemType);
+
+        let message = `Are you sure you want to delete ${itemCount} `;
+        if (isMultipleTypes) {
+            message += 'items';
+        } else {
+            message += itemCount === 1 ? itemType : `${itemType}s`;
+        }
+        message += '?';
+
+        // Add warning for folder deletion
+        const hasFolders = Array.from(this.selectedItems)
+            .some(item => item.type === 'folder');
+        if (hasFolders) {
+            message += '\n\nWarning: Deleting folders will also delete all contents inside them.';
+        }
+
+        if (confirm(message)) {
+            const success = window.promptApp.deleteItems(Array.from(this.selectedItems));
+            if (success) {
+                this.clearSelection();
+            }
+        }
+    }
+
+    // UI Updates
+    updateActionButtons() {
+        const hasSelection = this.selectedItems.size > 0;
+        
+        // Get required elements
+        const defaultActions = document.getElementById('default-actions');
+        const selectionActions = document.getElementById('selection-actions');
+        const moveSelect = document.getElementById('move-folder-select');
+        
+        if (defaultActions && selectionActions) {
+            defaultActions.classList.toggle('hidden', hasSelection);
+            selectionActions.classList.toggle('hidden', !hasSelection);
+            
+            if (moveSelect) {
+                moveSelect.classList.add('hidden');
+                moveSelect.value = '';
+            }
+        }
+
+        // Update button titles if needed
+        if (hasSelection) {
+            const moveBtn = document.getElementById('move-selected-btn');
+            const deleteBtn = document.getElementById('delete-selected-btn');
+            
+            if (moveBtn && deleteBtn) {
+                const count = this.selectedItems.size;
+                moveBtn.title = `Move ${count} item(s)`;
+                deleteBtn.title = `Delete ${count} item(s)`;
+            }
+        }
+    }
+}
+
 class SidebarComponent extends BaseComponent {
     constructor() {
         super();
         this.currentFolderId = 'root';
-        this.selectedItems = new Set();
         this.activePromptId = null;
         this.isMobileMenuOpen = false;
+        this.selectionManager = new SelectionManager(this);
     }
 
     setActivePrompt(promptId) {
@@ -467,16 +603,15 @@ class SidebarComponent extends BaseComponent {
     setupEventListeners() {
         this.ensureStructure();
 
-        // Existing action button listeners
+        // Action button listeners
         const actionButtons = {
             'back-arrow': () => this.handleNavigateUp(),
             'new-folder-btn': () => this.handleNewFolder(),
             'new-prompt-btn': () => this.handleNewPrompt(),
             'import-btn': () => this.handleImport(),
             'export-btn': () => this.handleExport(),
-            'delete-selected-btn': () => this.handleDeleteSelected(),
+            'delete-selected-btn': () => this.selectionManager.handleDeleteSelected(),
             'move-selected-btn': () => this.handleMoveSelected(),
-            // Add burger menu listener
             'sidebar-toggle': () => this.toggleMobileMenu()
         };
 
@@ -500,104 +635,8 @@ class SidebarComponent extends BaseComponent {
         // Keyboard shortcuts
         this.eventHandler.bind(document, 'keydown', (e) => this.handleKeyboardShortcuts(e));
 
-        // Add dark mode toggle handler
-        const darkModeToggle = document.getElementById('dark-mode-toggle');
-        if (darkModeToggle) {
-            // Initialize dark mode based on storage or system preference
-            const initializeDarkMode = () => {
-                const storedDarkMode = localStorage.getItem('darkMode');
-                if (storedDarkMode === null) {
-                    // No stored preference, check system preference
-                    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                    localStorage.setItem('darkMode', systemPrefersDark);
-                    if (systemPrefersDark) {
-                        document.documentElement.classList.add('dark');
-                        this.updateStatusBarColor(true);
-                    }
-                } else {
-                    // Use stored preference
-                    if (storedDarkMode === 'true') {
-                        document.documentElement.classList.add('dark');
-                        this.updateStatusBarColor(true);
-                    }
-                }
-            };
-
-            // Call initialization
-            initializeDarkMode();
-
-            // Handle toggle clicks
-            this.eventHandler.bind(darkModeToggle, 'click', () => {
-                document.documentElement.classList.add('transition-all', 'duration-200');
-                requestAnimationFrame(() => {
-                    const isDark = document.documentElement.classList.toggle('dark');
-                    localStorage.setItem('darkMode', isDark);
-                    this.updateStatusBarColor(isDark);
-                    
-                    setTimeout(() => {
-                        document.documentElement.classList.remove('transition-all', 'duration-200');
-                    }, 300);
-                });
-            });
-
-            // Listen for system preference changes
-            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-                // Only update if user hasn't set a preference
-                if (localStorage.getItem('darkMode') === null) {
-                    if (e.matches) {
-                        document.documentElement.classList.add('dark');
-                        this.updateStatusBarColor(true);
-                    } else {
-                        document.documentElement.classList.remove('dark');
-                        this.updateStatusBarColor(false);
-                    }
-                    localStorage.setItem('darkMode', e.matches);
-                }
-            });
-        }
-    }
-
-    updateStatusBarColor(isDark) {
-        let metaThemeColor = document.querySelector('meta[name="theme-color"]');
-        let metaStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
-        
-        // Create theme-color meta if it doesn't exist
-        if (!metaThemeColor) {
-            metaThemeColor = document.createElement('meta');
-            metaThemeColor.name = 'theme-color';
-            document.head.appendChild(metaThemeColor);
-        }
-
-        // Create status-bar meta if it doesn't exist
-        if (!metaStatusBar) {
-            metaStatusBar = document.createElement('meta');
-            metaStatusBar.name = 'apple-mobile-web-app-status-bar-style';
-            document.head.appendChild(metaStatusBar);
-        }
-
-        // Now safely set the content
-        const color = isDark ? '#111827' : '#FFFFFF'; // Using Tailwind's gray-900 for dark and white for light
-        metaThemeColor.content = color;
-        metaStatusBar.content = isDark ? 'black-translucent' : 'default';
-    }
-
-    toggleMobileMenu() {
-        this.isMobileMenuOpen = !this.isMobileMenuOpen;
-        const sidebar = document.getElementById('sidebar');
-        const overlay = document.getElementById('sidebar-overlay');
-        const burgerContainer = document.getElementById('burger-container');
-
-        if (this.isMobileMenuOpen) {
-            sidebar.classList.remove('-left-64');
-            sidebar.classList.add('left-0');
-            overlay.classList.remove('hidden');
-            burgerContainer.style.transform = 'translateX(200px)'; // Move slightly less than sidebar width
-        } else {
-            sidebar.classList.add('-left-64');
-            sidebar.classList.remove('left-0');
-            overlay.classList.add('hidden');
-            burgerContainer.style.transform = 'translateX(0)';
-        }
+        // Setup dark mode toggle
+        this.setupDarkModeToggle();
     }
 
     handleItemClick(e) {
@@ -608,46 +647,120 @@ class SidebarComponent extends BaseComponent {
         const type = item.dataset.type;
 
         if (e.ctrlKey || e.metaKey) {
-            this.handleSelection(id, type);
-        } else {
-            // Clear selection
-            this.selectedItems.clear();
-            
-            // Navigate or open prompt
+            this.selectionManager.toggleSelection(id, type);
+        } else if (!this.selectionManager.hasSelectedItems()) {
+            // Navigate or open prompt only if not in selection mode
             if (type === 'folder') {
                 this.navigateToFolder(id);
             } else {
                 this.handlePromptClick(id);
             }
+        } else {
+            // If in selection mode, handle as selection
+            this.selectionManager.toggleSelection(id, type);
         }
 
         this.render();
-        this.updateActionButtons();
     }
 
-    handleSelection(id, type) {
-        // Find existing item in set that matches id and type
-        const existingItem = Array.from(this.selectedItems)
-            .find(item => item.id === id && item.type === type);
-        
-        if (existingItem) {
-            this.selectedItems.delete(existingItem);
-        } else {
-            this.selectedItems.add({id, type}); 
-        }
-    }
-
-    isSelected(id) {
-        return Array.from(this.selectedItems)
-            .some(item => item.id === id);
-    }
-    
     handleKeyboardShortcuts(e) {
         // Delete selected items
-        if (e.key === 'Delete' && this.selectedItems.size > 0) {
+        if (e.key === 'Delete' && this.selectionManager.hasSelectedItems()) {
             e.preventDefault();
-            this.handleDeleteSelected();
+            this.selectionManager.handleDeleteSelected();
         }
+    }
+
+    handleMoveSelected() {
+        const moveSelect = document.getElementById('move-folder-select');
+        const newFolderBtn = document.getElementById('new-folder-btn');
+        const newPromptBtn = document.getElementById('new-prompt-btn');
+        const bottomActions = document.getElementById('bottom-actions');
+        
+        if (!moveSelect || !bottomActions || !newFolderBtn || !newPromptBtn) return;
+
+        // Hide new folder/prompt buttons
+        newFolderBtn.classList.add('hidden');
+        newPromptBtn.classList.add('hidden');
+        
+        // Show the select dropdown
+        moveSelect.classList.remove('hidden');
+        
+        // Move the dropdown to bottom row
+        bottomActions.appendChild(moveSelect);
+        
+        // Get available folders, excluding selected ones
+        const selectedIds = new Set(this.selectionManager.getSelectedItems().map(item => item.id));
+        const folders = window.promptApp.getFolderList()
+            .filter(folder => !selectedIds.has(folder.id));
+
+        // Populate dropdown
+        moveSelect.innerHTML = `
+            <option value="">Select destination...</option>
+            ${folders.map(folder => `
+                <option value="${folder.id}">${folder.name}</option>
+            `).join('')}
+        `;
+
+        const restoreButtons = () => {
+            newFolderBtn.classList.remove('hidden');
+            newPromptBtn.classList.remove('hidden');
+            moveSelect.classList.add('hidden');
+            moveSelect.value = '';
+            document.removeEventListener('click', handleOutsideClick);
+        };
+
+        // Handle selection
+        const handleChange = (e) => {
+            const targetFolderId = e.target.value;
+            if (!targetFolderId) return;
+
+            this.selectionManager.handleMoveSelected(targetFolderId);
+            restoreButtons();
+            moveSelect.removeEventListener('change', handleChange);
+        };
+
+        // Handle clicking outside
+        const handleOutsideClick = (e) => {
+            if (!moveSelect.contains(e.target) && !e.target.closest('#move-selected-btn')) {
+                restoreButtons();
+            }
+        };
+
+        moveSelect.addEventListener('change', handleChange);
+        document.addEventListener('click', handleOutsideClick);
+    }
+
+    renderItems() {
+        const itemList = document.getElementById('item-list');
+        if (!itemList) return;
+
+        const folders = Object.entries(window.promptApp.data.folders)
+            .filter(([_, folder]) => folder.parentId === this.currentFolderId)
+            .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+        const prompts = Object.entries(window.promptApp.data.prompts)
+            .filter(([_, prompt]) => prompt.parentId === this.currentFolderId)
+            .sort((a, b) => a[1].name.localeCompare(b[1].name));
+
+        const html = [
+            ...folders.map(([id, folder]) => 
+                SidebarHTML.renderFolderItem(
+                    id, 
+                    folder, 
+                    this.selectionManager.isSelected(id)
+                )),
+            ...prompts.map(([id, prompt]) => 
+                SidebarHTML.renderPromptItem(
+                    id, 
+                    prompt, 
+                    this.selectionManager.isSelected(id),
+                    window.promptApp.isFavorite(id),
+                    id === this.activePromptId
+                ))
+        ].join('');
+
+        itemList.innerHTML = html || '<p class="text-gray-500 p-2">This folder is empty</p>';
     }
 
     handleNavigateUp() {
@@ -735,149 +848,31 @@ class SidebarComponent extends BaseComponent {
         }
     }
 
-    handleMoveSelected() {
-        const moveSelect = document.getElementById('move-folder-select');
-        const newFolderBtn = document.getElementById('new-folder-btn');
-        const newPromptBtn = document.getElementById('new-prompt-btn');
-        const bottomActions = document.getElementById('bottom-actions');
-        
-        if (!moveSelect || !bottomActions || !newFolderBtn || !newPromptBtn) {
-            console.error("Required elements not found");
-            return;
-        }
-
-        // Hide new folder/prompt buttons
-        newFolderBtn.classList.add('hidden');
-        newPromptBtn.classList.add('hidden');
-        
-        // Show the select dropdown
-        moveSelect.classList.remove('hidden');
-        
-        // Move the dropdown to bottom row
-        bottomActions.appendChild(moveSelect);
-        
-        // Get available folders, excluding selected ones
-        const selectedIds = new Set(Array.from(this.selectedItems).map(item => item.id));
-        const folders = window.promptApp.getFolderList()
-            .filter(folder => !selectedIds.has(folder.id));
-
-        // Populate dropdown
-        moveSelect.innerHTML = `
-            <option value="">Select destination...</option>
-            ${folders.map(folder => `
-                <option value="${folder.id}">${folder.name}</option>
-            `).join('')}
-        `;
-
-        const restoreButtons = () => {
-            newFolderBtn.classList.remove('hidden');
-            newPromptBtn.classList.remove('hidden');
-            moveSelect.classList.add('hidden');
-            moveSelect.value = '';
-            document.removeEventListener('click', handleOutsideClick);
-        };
-
-        // Handle selection
-        const handleChange = (e) => {
-            const targetFolderId = e.target.value;
-            if (!targetFolderId) return;
-
-            if (window.promptApp.moveItemsToFolder(
-                Array.from(this.selectedItems), 
-                targetFolderId
-            )) {
-                this.clearSelection();
-            }
-            restoreButtons();
-            moveSelect.removeEventListener('change', handleChange);
-        };
-
-        // Handle clicking outside
-        const handleOutsideClick = (e) => {
-            if (!moveSelect.contains(e.target) && !e.target.closest('#move-selected-btn')) {
-                restoreButtons();
-            }
-        };
-
-        moveSelect.addEventListener('change', handleChange);
-        document.addEventListener('click', handleOutsideClick);
-    }
-
-    handleDeleteSelected() {
-        if (this.selectedItems.size === 0) return;
-
-        const itemCount = this.selectedItems.size;
-        const itemType = Array.from(this.selectedItems)[0].type;
-        const isMultipleTypes = Array.from(this.selectedItems).some(item => item.type !== itemType);
-
-        let message = `Are you sure you want to delete ${itemCount} `;
-        if (isMultipleTypes) {
-            message += 'items';
-        } else {
-            message += itemCount === 1 ? itemType : `${itemType}s`;
-        }
-        message += '?';
-
-        // Add warning for folder deletion
-        const hasFolders = Array.from(this.selectedItems).some(item => item.type === 'folder');
-        if (hasFolders) {
-            message += '\n\nWarning: Deleting folders will also delete all contents inside them.';
-        }
-
-        if (confirm(message)) {
-            if (window.promptApp.deleteItems(Array.from(this.selectedItems))) {
-                this.clearSelection();
-            }
-        }
-    }
-
-    clearSelection() {
-        this.selectedItems.clear();
-        this.updateActionButtons();
-        this.render();
-    }
-
-    isSelected(id) {
-        return Array.from(this.selectedItems).some(item => item.id === id);
-    }
-
     navigateToFolder(folderId) {
         if (!window.promptApp.data.folders[folderId]) {
             throw new Error('Invalid folder ID');
         }
         this.currentFolderId = folderId;
-        this.clearSelection();
+        this.selectionManager.clearSelection();
         this.render();
     }
 
-    updateActionButtons() {
-        const hasSelection = this.selectedItems.size > 0;
-        
-        // Toggle visibility of action groups
-        const defaultActions = document.getElementById('default-actions');
-        const selectionActions = document.getElementById('selection-actions');
-        const moveSelect = document.getElementById('move-folder-select');
-        
-        if (defaultActions && selectionActions) {
-            defaultActions.classList.toggle('hidden', hasSelection);
-            selectionActions.classList.toggle('hidden', !hasSelection);
-            
-            if (moveSelect) {
-                moveSelect.classList.add('hidden');
-                moveSelect.value = '';
-            }
-        }
+    toggleMobileMenu() {
+        this.isMobileMenuOpen = !this.isMobileMenuOpen;
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        const burgerContainer = document.getElementById('burger-container');
 
-        // Update button titles if needed
-        if (hasSelection) {
-            const moveBtn = document.getElementById('move-selected-btn');
-            const deleteBtn = document.getElementById('delete-selected-btn');
-            
-            if (moveBtn && deleteBtn) {
-                const count = this.selectedItems.size;
-                moveBtn.title = `Move ${count} item(s)`;
-                deleteBtn.title = `Delete ${count} item(s)`;
-            }
+        if (this.isMobileMenuOpen) {
+            sidebar.classList.remove('-left-64');
+            sidebar.classList.add('left-0');
+            overlay.classList.remove('hidden');
+            burgerContainer.style.transform = 'translateX(200px)';
+        } else {
+            sidebar.classList.add('-left-64');
+            sidebar.classList.remove('left-0');
+            overlay.classList.add('hidden');
+            burgerContainer.style.transform = 'translateX(0)';
         }
     }
 
@@ -889,32 +884,85 @@ class SidebarComponent extends BaseComponent {
         }
     }
 
-    renderItems() {
-        const itemList = document.getElementById('item-list');
-        if (!itemList) return;
+    setupDarkModeToggle() {
+        const darkModeToggle = document.getElementById('dark-mode-toggle');
+        if (darkModeToggle) {
+            // Initialize dark mode based on storage or system preference
+            const initializeDarkMode = () => {
+                const storedDarkMode = localStorage.getItem('darkMode');
+                if (storedDarkMode === null) {
+                    // No stored preference, check system preference
+                    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    localStorage.setItem('darkMode', systemPrefersDark);
+                    if (systemPrefersDark) {
+                        document.documentElement.classList.add('dark');
+                        this.updateStatusBarColor(true);
+                    }
+                } else {
+                    // Use stored preference
+                    if (storedDarkMode === 'true') {
+                        document.documentElement.classList.add('dark');
+                        this.updateStatusBarColor(true);
+                    }
+                }
+            };
 
-        const folders = Object.entries(window.promptApp.data.folders)
-            .filter(([_, folder]) => folder.parentId === this.currentFolderId)
-            .sort((a, b) => a[1].name.localeCompare(b[1].name));
+            // Call initialization
+            initializeDarkMode();
 
-        const prompts = Object.entries(window.promptApp.data.prompts)
-            .filter(([_, prompt]) => prompt.parentId === this.currentFolderId)
-            .sort((a, b) => a[1].name.localeCompare(b[1].name));
+            // Handle toggle clicks
+            this.eventHandler.bind(darkModeToggle, 'click', () => {
+                document.documentElement.classList.add('transition-all', 'duration-200');
+                requestAnimationFrame(() => {
+                    const isDark = document.documentElement.classList.toggle('dark');
+                    localStorage.setItem('darkMode', isDark);
+                    this.updateStatusBarColor(isDark);
+                    
+                    setTimeout(() => {
+                        document.documentElement.classList.remove('transition-all', 'duration-200');
+                    }, 300);
+                });
+            });
 
-        const html = [
-            ...folders.map(([id, folder]) => 
-                SidebarHTML.renderFolderItem(id, folder, this.isSelected(id))),
-            ...prompts.map(([id, prompt]) => 
-                SidebarHTML.renderPromptItem(
-                    id, 
-                    prompt, 
-                    this.isSelected(id),
-                    window.promptApp.isFavorite(id),
-                    id === this.activePromptId
-                ))
-        ].join('');
+            // Listen for system preference changes
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+                // Only update if user hasn't set a preference
+                if (localStorage.getItem('darkMode') === null) {
+                    if (e.matches) {
+                        document.documentElement.classList.add('dark');
+                        this.updateStatusBarColor(true);
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                        this.updateStatusBarColor(false);
+                    }
+                    localStorage.setItem('darkMode', e.matches);
+                }
+            });
+        }
+    }
 
-        itemList.innerHTML = html || '<p class="text-gray-500 p-2">This folder is empty</p>';
+    updateStatusBarColor(isDark) {
+        let metaThemeColor = document.querySelector('meta[name="theme-color"]');
+        let metaStatusBar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+        
+        // Create theme-color meta if it doesn't exist
+        if (!metaThemeColor) {
+            metaThemeColor = document.createElement('meta');
+            metaThemeColor.name = 'theme-color';
+            document.head.appendChild(metaThemeColor);
+        }
+
+        // Create status-bar meta if it doesn't exist
+        if (!metaStatusBar) {
+            metaStatusBar = document.createElement('meta');
+            metaStatusBar.name = 'apple-mobile-web-app-status-bar-style';
+            document.head.appendChild(metaStatusBar);
+        }
+
+        // Now safely set the content
+        const color = isDark ? '#111827' : '#FFFFFF';
+        metaThemeColor.content = color;
+        metaStatusBar.content = isDark ? 'black-translucent' : 'default';
     }
 }
 
@@ -4858,12 +4906,14 @@ class PromptApplication {
                         'warning'
                     );
                 }
+                this.refreshViews();  // Add refresh here
             } else {
                 NotificationSystem.show('Failed to move items', 'error');
             }
 
             return result.success;
         } catch (error) {
+            console.error('🔥 Move operation error:', error);
             NotificationSystem.show(error.message || 'Error moving items', 'error');
             return false;
         }
@@ -4882,12 +4932,14 @@ class PromptApplication {
                         'warning'
                     );
                 }
+                this.refreshViews();  // Add refresh here
             } else {
                 NotificationSystem.show('Failed to delete items', 'error');
             }
 
             return result.success;
         } catch (error) {
+            console.error('🔥 Delete operation error:', error);
             NotificationSystem.show(error.message || 'Error deleting items', 'error');
             return false;
         }
