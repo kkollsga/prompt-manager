@@ -3613,10 +3613,19 @@ class IfProcessor {
                 let result;
                 // Handle equality comparisons
                 if (operator === '=' || operator === '==' || operator === '===') {
-                    if (['radio', 'select', 'str', 'text'].includes(placeholder.type)) {
-                        result = placeholder.options ? 
-                            placeholder.options[placeholder.value] === right.trim() :
-                            String(placeholder.value).trim() === right.trim();
+                    if (['radio', 'select', 'bool', 'boolean'].includes(placeholder.type)) {
+                        const rightValue = right.trim();
+                        // First try to parse as number for index comparison
+                        const indexValue = parseInt(rightValue, 10);
+                        if (!isNaN(indexValue)) {
+                            // Compare as index
+                            result = placeholder.value === indexValue;
+                        } else {
+                            // Compare as option text, case-insensitive
+                            result = placeholder.options[placeholder.value]?.toLowerCase() === rightValue.toLowerCase();
+                        }
+                    } else if (['str', 'text'].includes(placeholder.type)) {
+                        result = String(placeholder.value).trim() === rightValue.trim();
                     } else {
                         const leftValue = parseFloat(placeholder.value);
                         const rightValue = parseFloat(right);
