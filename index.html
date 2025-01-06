@@ -15,9 +15,6 @@
     <link rel="apple-touch-icon" sizes="180x180" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230072CE'/%3E%3Cpath d='M256 128v256M128 256h256' stroke='white' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
     <link rel="apple-touch-icon" sizes="167x167" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%230072CE'/%3E%3Cpath d='M256 128v256M128 256h256' stroke='white' stroke-width='40' stroke-linecap='round'/%3E%3C/svg%3E">
     
-    <!-- Web App Manifest -->
-    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiUHJvbXB0IE1hbmFnZXIiLCJzaG9ydF9uYW1lIjoiUHJvbXB0cyIsInN0YXJ0X3VybCI6Ii4vaW5kZXguaHRtbCIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiMwMDcyQ0UiLCJ0aGVtZV9jb2xvciI6IiMwMDcyQ0UifQ==">
-    
     <!-- Existing head content -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -878,9 +875,21 @@ class SidebarComponent extends BaseComponent {
 
     updateFolderName() {
         const folderName = document.getElementById('folder-name');
+        const backArrow = document.getElementById('back-arrow');
         const currentFolder = window.promptApp.data.folders[this.currentFolderId];
+        
         if (folderName && currentFolder) {
             folderName.textContent = currentFolder.name;
+        }
+        
+        if (backArrow) {
+            const isRoot = this.currentFolderId === 'root';
+            backArrow.classList.toggle('opacity-0', isRoot);
+            backArrow.classList.toggle('invisible', isRoot);
+            backArrow.classList.toggle('pointer-events-none', isRoot);
+            backArrow.setAttribute('aria-disabled', isRoot);
+            // For smooth transition, ensure these classes are always present
+            backArrow.classList.add('transition-opacity', 'duration-200');
         }
     }
 
@@ -3604,9 +3613,7 @@ class IfProcessor {
                 const [, left, operator, right] = comparisonMatch;
                 const lookupKey = left.replace(/_/g, ' ');
                 const placeholder = this.values.get(lookupKey);
-                
                 if (!placeholder || placeholder.value === null || placeholder.value === undefined) {
-                    console.warn(`Invalid placeholder value for ${lookupKey}`);
                     return { result: isNegated };
                 }
 
