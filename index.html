@@ -90,9 +90,9 @@ Do a root cause analysis to identify the real issue. Have a mindset of changing 
         title: "Code Reviewer",
         prompt: `I will help you review code or analyze technical problems. 
 
-What should I focus on? Select the primary focus: <focus:select[correctness,performance,security,maintainability]>
+I will mainly focus on: <focus:select[correctness,performance,security,maintainability]>
 
-How detailed should the review be? <depth:radio[basic,detailed,comprehensive]>
+The level of detail on my review is: <depth:radio[basic,detailed,comprehensive]>
 
 The programming language is: <language:select[Python,JavaScript,Java,C#]>
 
@@ -100,7 +100,7 @@ The programming language is: <language:select[Python,JavaScript,Java,C#]>
 
 The provided code or problem to analyze: 
 <content:text>`,
-        folder: "prompts"
+        folder: "Prompts"
     }
 ]
 
