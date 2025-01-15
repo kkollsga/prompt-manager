@@ -73,6 +73,40 @@
 <script>
 /*
 ====================================
+    Intro Prompts
+====================================
+*/
+const introPrompts = [
+    {
+        title: 'SurgicalDebugger',
+        prompt: `I am building a webapp in a single html file with js, and tailwindcss classes for styling.
+
+<Describe the issue:text>
+
+Do a root cause analysis to identify the real issue. Have a mindset of changing as little changes as possible. If you are unsure if the fix will completly solve the issue let the user know. Based on the analysis suggest three different solutions to the problem. The three different options should attack the issue at different parts of the code. Of the three options which is the best one? Based on the analysis of all options, is the best option missing some details needed for a robust solution? Finalize the best option to make it as robust as possible, while modifying as little code as possible. Proceed with the final answer. Don't print functions where no code has been changed.`,
+        folder: 'root'
+    },
+    {
+        title: "Code Reviewer",
+        prompt: `I will help you review code or analyze technical problems. 
+
+What should I focus on? Select the primary focus: <focus:select[correctness,performance,security,maintainability]>
+
+How detailed should the review be? <depth:radio[basic,detailed,comprehensive]>
+
+The programming language is: <language:select[Python,JavaScript,Java,C#]>
+
+{if focus=0}I will check for bugs and logical errors. {if depth>=1}I will also suggest improvements to the code structure.{/if}{else if focus=1}I will analyze performance. {if depth>=1}I will include complexity analysis and optimization suggestions.{/if}{else if focus=2}I will check for security issues. {if depth>=1}I will include secure coding recommendations.{/if}{else}I will review code clarity and organization. {if depth>=1}I will suggest improvements for maintainability.{/if}{/if}
+
+The provided code or problem to analyze: 
+<content:text>`,
+        folder: "prompts"
+    }
+]
+
+
+/*
+====================================
     Base Component Class
 ====================================
 */
@@ -3618,9 +3652,9 @@ class IfProcessor {
                 }
 
                 let result;
-                // Handle equality comparisons
-                if (operator === '=' || operator === '==' || operator === '===') {
-                    if (['radio', 'select', 'bool', 'boolean'].includes(placeholder.type)) {
+                // Handle comparisons for select/radio/bool types
+                if (['radio', 'select', 'bool', 'boolean'].includes(placeholder.type)) {
+                    if (operator === '=' || operator === '==' || operator === '===') {
                         const rightValue = right.trim();
                         // First try to parse as number for index comparison
                         const indexValue = parseInt(rightValue, 10);
@@ -3631,17 +3665,30 @@ class IfProcessor {
                             // Compare as option text, case-insensitive
                             result = placeholder.options[placeholder.value]?.toLowerCase() === rightValue.toLowerCase();
                         }
-                    } else if (['str', 'text'].includes(placeholder.type)) {
-                        result = String(placeholder.value).trim() === rightValue.trim();
                     } else {
-                        const leftValue = parseFloat(placeholder.value);
-                        const rightValue = parseFloat(right);
-                        result = leftValue === rightValue;
+                        // Handle numeric comparisons for select/radio values
+                        const leftValue = placeholder.value;  // Already an index
+                        const rightValue = parseInt(right, 10);
+                        
+                        if (isNaN(rightValue)) {
+                            console.warn('Invalid numeric comparison value');
+                            return { result: isNegated };
+                        }
+
+                        switch(operator) {
+                            case '<': result = leftValue < rightValue; break;
+                            case '<=': result = leftValue <= rightValue; break;
+                            case '>': result = leftValue > rightValue; break;
+                            case '>=': result = leftValue >= rightValue; break;
+                            default:
+                                console.warn(`Unsupported operator for select/radio: ${operator}`);
+                                return { result: isNegated };
+                        }
                     }
                     return { result: isNegated ? !result : result };
                 }
 
-                // Numeric comparisons
+                // Handle numeric comparisons for other types
                 if (!['int', 'float'].includes(placeholder.type)) {
                     console.warn(`Invalid type for numeric comparison: ${placeholder.type}`);
                     return { result: isNegated };
@@ -3660,6 +3707,11 @@ class IfProcessor {
                     case '<=': result = leftValue <= rightValue; break;
                     case '>': result = leftValue > rightValue; break;
                     case '>=': result = leftValue >= rightValue; break;
+                    case '=':
+                    case '==':
+                    case '===':
+                        result = leftValue === rightValue;
+                        break;
                     default:
                         console.warn(`Unsupported operator: ${operator}`);
                         return { result: isNegated };
@@ -4364,10 +4416,59 @@ class DataManager {
                     favorites: favorites || [],
                     recentlyEdited: recentlyEdited || []
                 };
+            } else {
+                // Initialize with intro prompts if no data exists
+                this.initializeWithIntroPrompts();
             }
         } catch (error) {
             console.error('Error loading from storage:', error);
             NotificationSystem.show('Error loading saved data', 'error');
+        }
+    }
+
+    initializeWithIntroPrompts() {
+        try {
+            // Track created folders to avoid duplication
+            const createdFolders = new Map();
+            createdFolders.set('root', 'root');
+
+            // Process each intro prompt
+            introPrompts.forEach(promptData => {
+                // Create folder path if needed
+                let parentId = 'root';
+                if (promptData.folder && promptData.folder !== 'root') {
+                    const folderPath = promptData.folder.split('/');
+                    let currentPath = '';
+                    
+                    // Create each folder in path if it doesn't exist
+                    folderPath.forEach(folderName => {
+                        currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+                        
+                        if (!createdFolders.has(currentPath)) {
+                            const newFolderId = this.addFolder({
+                                name: folderName,
+                                parentId: createdFolders.get(currentPath.split('/').slice(0, -1).join('/') || 'root')
+                            });
+                            createdFolders.set(currentPath, newFolderId);
+                        }
+                        parentId = createdFolders.get(currentPath);
+                    });
+                }
+
+                // Create prompt
+                this.addPrompt({
+                    name: promptData.title,
+                    content: promptData.prompt,
+                    parentId: parentId
+                });
+            });
+
+            // Save the initialized data
+            this.saveToStorage();
+            NotificationSystem.show('Successfully initialized app', 'success');
+        } catch (error) {
+            console.error('Error initializing with intro prompts:', error);
+            NotificationSystem.show('Error initializing default prompts', 'error');
         }
     }
 
